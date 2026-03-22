@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>MARGINALIA</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,300;0,400;0,500;0,600;1,400&display=swap" rel="stylesheet" />
+<style>
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --font:'IBM Plex Mono','Menlo','Consolas',monospace;
+  --bg:#0a0a0a;--surface:#141414;--border:#282828;
+  --muted:#666;--text:#e0e0e0;--accent:#fff;
+}
+html,body{height:100%;width:100%;overflow:hidden;
+  font-family:var(--font);font-size:13px;background:var(--bg);color:var(--text);
+  -webkit-font-smoothing:antialiased}
+button,input,textarea{font-family:var(--font);outline:none}
+::selection{background:var(--accent);color:var(--bg)}
+::-webkit-scrollbar{width:6px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+::-webkit-scrollbar-thumb:hover{background:var(--muted)}
+
+#app{display:flex;height:100vh;width:100%}
+
+/* SIDEBAR */
+#sidebar{width:260px;min-width:260px;height:100%;border-right:1px solid var(--border);
+  display:flex;flex-direction:column;background:var(--surface)}
+.sb-header{padding:16px 16px 8px;display:flex;justify-content:space-between;align-items:center}
+.sb-logo{font-size:10px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:2px}
+.sb-actions{display:flex;gap:6px}
+.icon-btn{background:none;border:none;color:var(--muted);cursor:pointer;font-size:14px;padding:2px 4px;transition:color .15s}
+.icon-btn:hover{color:var(--text)}
+
+.sb-search{padding:0 12px 8px;display:none}
+.sb-search.open{display:block}
+.sb-search input{width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);
+  font-size:11px;padding:6px 8px;border-radius:2px}
+.sb-search input:focus{border-color:var(--accent)}
+
+.sb-settings{padding:8px 12px 12px;border-bottom:1px solid var(--border);display:none}
+.sb-settings.open{display:block}
+.sb-settings-label{font-size:10px;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:1px}
+.sb-settings-row{display:flex;gap:4px;margin-bottom:10px}
+.sb-settings-btn{flex:1;padding:4px 0;font-size:10px;background:transparent;color:var(--muted);
+  border:1px solid var(--border);cursor:pointer;border-radius:2px;text-transform:capitalize;transition:all .15s}
+.sb-settings-btn:hover{color:var(--text);border-color:var(--muted)}
+.sb-settings-btn.active{background:var(--accent);color:var(--bg);border-color:var(--accent)}
+
+#ctx-list{flex:1;overflow-y:auto}
+.ctx-item{padding:10px 16px;cursor:pointer;border-bottom:1px solid var(--border);transition:background .1s}
+.ctx-item:hover{background:rgba(255,255,255,.03)}
+.ctx-item.active{background:var(--bg)}
+.ctx-title{font-size:12px;font-weight:500;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ctx-item.active .ctx-title{color:var(--accent)}
+.ctx-meta{display:flex;justify-content:space-between;align-items:center;margin-top:3px;font-size:10px;color:var(--muted)}
+.ctx-del{background:none;border:none;color:var(--muted);cursor:pointer;font-size:13px;padding:0 2px;opacity:0;transition:opacity .15s}
+.ctx-item:hover .ctx-del{opacity:.4}
+.ctx-del:hover{opacity:1!important;color:var(--text)}
+
+#search-results{flex:1;overflow-y:auto;display:none}
+.sr-count{padding:6px 12px;font-size:10px;color:var(--muted)}
+.sr-item{padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--border);transition:background .1s}
+.sr-item:hover{background:var(--surface)}
+.sr-text{font-size:11px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sr-meta{font-size:9px;color:var(--muted);margin-top:2px}
+
+.sb-bottom{border-top:1px solid var(--border)}
+#new-ctx-form{padding:12px;display:none}
+#new-ctx-form.open{display:block}
+#new-ctx-form input,#new-ctx-form textarea{width:100%;background:var(--bg);border:1px solid var(--border);
+  color:var(--text);font-size:11px;padding:6px 8px;border-radius:2px;margin-bottom:6px}
+#new-ctx-form input:focus,#new-ctx-form textarea:focus{border-color:var(--accent)}
+#new-ctx-form textarea{resize:vertical}
+.ncf-actions{display:flex;gap:4px}
+.ncf-create{flex:1;padding:5px 0;font-size:10px;background:var(--accent);color:var(--bg);border:none;cursor:pointer;border-radius:2px;font-weight:600}
+.ncf-cancel{flex:1;padding:5px 0;font-size:10px;background:transparent;color:var(--muted);border:1px solid var(--border);cursor:pointer;border-radius:2px}
+#new-ctx-btn{width:100%;padding:10px 16px;font-size:11px;background:transparent;color:var(--muted);border:none;cursor:pointer;text-align:left;transition:color .15s}
+#new-ctx-btn:hover{color:var(--text)}
+
+/* MAIN */
+#main{flex:1;display:flex;flex-direction:column;height:100%;overflow:hidden}
+#main-empty{flex:1;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:12px}
+#main-content{flex:1;display:flex;flex-direction:column;height:100%;overflow:hidden;display:none}
+
+.main-header{padding:16px 24px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:flex-start}
+.main-title{font-size:16px;font-weight:500;margin:0;color:var(--text);letter-spacing:-.5px}
+.main-preview{font-size:11px;color:var(--muted);margin-top:4px;line-height:1.4;max-height:40px;overflow:hidden}
+.export-btns{display:flex;gap:4px;flex-shrink:0}
+.export-btn{background:transparent;border:1px solid var(--border);color:var(--muted);cursor:pointer;
+  font-size:10px;padding:3px 8px;border-radius:2px;transition:all .15s}
+.export-btn:hover{border-color:var(--muted);color:var(--text)}
+
+.input-area{padding:16px 24px;border-bottom:1px solid var(--border)}
+.mode-row{display:flex;align-items:center;margin-bottom:10px;gap:12px}
+.mode-toggle{display:flex}
+.mode-btn{padding:5px 14px;font-size:11px;background:transparent;color:var(--muted);
+  border:1px solid var(--border);cursor:pointer;text-transform:capitalize;transition:all .15s}
+.mode-btn:hover{color:var(--text)}
+.mode-btn:first-child{border-radius:2px 0 0 2px}
+.mode-btn:nth-child(2){border-left:none}
+.mode-btn:last-child{border-left:none;border-radius:0 2px 2px 0}
+.mode-btn.active{background:var(--accent);color:var(--bg);border-color:var(--accent);font-weight:600}
+.mode-desc{font-size:10px;color:var(--muted)}
+.input-row{display:flex;gap:8px;align-items:flex-end}
+#thought-input{flex:1;background:var(--surface);border:1px solid var(--border);color:var(--text);
+  font-size:13px;padding:10px 12px;border-radius:2px;resize:vertical;line-height:1.6}
+#thought-input:focus{border-color:var(--accent)}
+#thought-input::placeholder{color:var(--muted)}
+#submit-btn{padding:10px 18px;font-size:11px;font-weight:600;background:var(--border);color:var(--muted);
+  border:none;cursor:default;border-radius:2px;white-space:nowrap;letter-spacing:1px;transition:all .15s}
+#submit-btn.active{background:var(--accent);color:var(--bg);cursor:pointer}
+
+#session-list{flex:1;overflow-y:auto}
+.session-empty{padding:40px;text-align:center;color:var(--muted);font-size:12px}
+
+.session{padding:12px 24px;cursor:pointer;border-bottom:1px solid var(--border);transition:background .15s}
+.session:hover{background:var(--surface)}
+.session.expanded{background:var(--surface)}
+.session-row{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+.session-original{font-size:13px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.5;flex:1;min-width:0}
+.session.expanded .session-original{white-space:normal}
+.session-meta{display:flex;align-items:center;gap:8px;margin-top:4px;font-size:10px;color:var(--muted)}
+.session-mode{color:var(--accent);opacity:.6;letter-spacing:1px;font-size:9px}
+.session-arrow{font-size:11px;color:var(--muted);transition:transform .2s;flex-shrink:0}
+.session.expanded .session-arrow{transform:rotate(90deg)}
+
+.session-detail{margin-top:16px;padding-top:12px;border-top:1px solid var(--border);display:none}
+.session.expanded .session-detail{display:block}
+.sd-section{margin-bottom:14px}
+.sd-section:last-child{margin-bottom:0}
+.sd-label{font-size:10px;color:var(--muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:1px}
+.sd-corrected{font-size:13px;color:var(--accent);line-height:1.6}
+.sd-tags{display:flex;flex-wrap:wrap;margin-bottom:4px}
+.sd-tag{display:inline-block;font-size:10px;padding:2px 6px;border:1px solid var(--border);color:var(--muted);border-radius:2px;margin-right:4px;margin-bottom:4px}
+.sd-error-detail{font-size:11px;color:var(--muted);margin-top:2px}
+.sd-expression{font-size:12px;color:var(--text);line-height:1.5;margin-bottom:4px;padding-left:12px;border-left:2px solid var(--border)}
+.sd-summary{font-size:12px;color:var(--text);line-height:1.5;font-style:italic}
+.sd-question{font-size:12px;color:var(--accent);line-height:1.5;margin-bottom:4px;opacity:.8}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="sidebar">
+    <div class="sb-header">
+      <span class="sb-logo">MARGINALIA</span>
+      <div class="sb-actions">
+        <button class="icon-btn" id="search-toggle" title="Search">⌕</button>
+        <button class="icon-btn" id="settings-toggle" title="Settings">⚙</button>
+      </div>
+    </div>
+    <div class="sb-search" id="sb-search">
+      <input type="text" id="search-input" placeholder="search sessions..." />
+    </div>
+    <div class="sb-settings" id="sb-settings">
+      <div class="sb-settings-label">Theme</div>
+      <div class="sb-settings-row" id="theme-btns"></div>
+      <div class="sb-settings-label">Default Mode</div>
+      <div class="sb-settings-row" id="mode-setting-btns"></div>
+    </div>
+    <div id="search-results"></div>
+    <div id="ctx-list"></div>
+    <div class="sb-bottom">
+      <div id="new-ctx-form">
+        <input type="text" id="ncf-title" placeholder="title" />
+        <textarea id="ncf-content" rows="3" placeholder="context text (optional)"></textarea>
+        <div class="ncf-actions">
+          <button class="ncf-create" id="ncf-create">Create</button>
+          <button class="ncf-cancel" id="ncf-cancel">Cancel</button>
+        </div>
+      </div>
+      <button id="new-ctx-btn">+ New Context</button>
+    </div>
+  </div>
+  <div id="main">
+    <div id="main-empty">Select or create a context to begin.</div>
+    <div id="main-content">
+      <div class="main-header">
+        <div>
+          <h1 class="main-title" id="main-title"></h1>
+          <div class="main-preview" id="main-preview"></div>
+        </div>
+        <div class="export-btns">
+          <button class="export-btn" id="export-md">.md</button>
+          <button class="export-btn" id="export-json">.json</button>
+        </div>
+      </div>
+      <div class="input-area">
+        <div class="mode-row">
+          <div class="mode-toggle" id="mode-toggle"></div>
+          <span class="mode-desc" id="mode-desc"></span>
+        </div>
+        <div class="input-row">
+          <textarea id="thought-input" rows="3" placeholder="write your thought in english..."></textarea>
+          <button id="submit-btn">SUBMIT</button>
+        </div>
+      </div>
+      <div id="session-list"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── STATE ──
+const THEMES = {
+  mono:  { name:'Mono',     accent:'#ffffff', bg:'#0a0a0a', surface:'#141414', border:'#282828', muted:'#666666', text:'#e0e0e0' },
+  green: { name:'Terminal',  accent:'#00ff41', bg:'#0a0a0a', surface:'#0d1a0f', border:'#1a3a1e', muted:'#4a7a4e', text:'#c0e8c4' },
+  amber: { name:'Amber',    accent:'#ffb000', bg:'#0a0a08', surface:'#1a1508', border:'#3a2a10', muted:'#7a6a3a', text:'#e8d8a0' },
+  blue:  { name:'Cold',     accent:'#4a9eff', bg:'#0a0a0e', surface:'#0d0f1a', border:'#1a2040', muted:'#4a5a8a', text:'#b0c0e8' },
+};
+const MODE_DESC = { correct:'grammar only', expand:'grammar + expressions + summary', deep:'full analysis + questions' };
+const MODE_LABEL = { correct:'COR', expand:'EXP', deep:'DEP' };
+
+let state = {
+  theme: 'mono',
+  mode: 'expand',
+  activeCtxId: null,
+  contexts: [
+    {
+      id:'demo-1', title:'Being and Time — Ch.3',
+      raw_content:"Heidegger's analysis of Dasein and being-in-the-world...",
+      created_at: Date.now()-86400000*3,
+      sessions:[{
+        id:'s1', mode:'deep', created_at:Date.now()-86400000*2,
+        original:'i think heidegger is saying that we dont choose to be thrown into the world, but we must choose what to do with that thrownness',
+        corrected:"I think Heidegger is saying that we don't choose to be thrown into the world, but we must choose what to do with that thrownness.",
+        errors:[{tag:'grammar/article',detail:'Consider capitalizing proper nouns consistently'}],
+        expressions:['To put it differently: Heidegger suggests that thrownness is unchosen, but our response to it is not.','An alternative phrasing: We are thrown without consent, yet tasked with owning what follows.'],
+        summary:'The core idea is the tension between the involuntary nature of existence and the necessity of authentic choice.',
+        questions:["If thrownness is unchosen, can any response to it truly be 'authentic' — or is authenticity itself a form of coping?"]
+      }]
+    },
+    { id:'demo-2', title:'March reflections', raw_content:'', created_at:Date.now()-86400000, sessions:[] }
+  ],
+  loading: false,
+};
+
+// ── UTILS ──
+const uid = () => Date.now().toString(36)+Math.random().toString(36).slice(2,8);
+
+function fmtDate(ts) {
+  const d=new Date(ts), now=new Date(), diff=now-d;
+  if(diff<86400000) return d.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',hour12:false});
+  if(diff<604800000) return d.toLocaleDateString('en-US',{weekday:'short'});
+  return d.toLocaleDateString('en-US',{month:'short',day:'numeric'});
+}
+
+function applyTheme(key) {
+  const t=THEMES[key]; if(!t) return;
+  const r=document.documentElement.style;
+  r.setProperty('--bg',t.bg); r.setProperty('--surface',t.surface);
+  r.setProperty('--border',t.border); r.setProperty('--muted',t.muted);
+  r.setProperty('--text',t.text); r.setProperty('--accent',t.accent);
+}
+
+function esc(s) { const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
+
+// ── MOCK AI ──
+function mockAI(text, mode) {
+  const errors=[], lower=text.toLowerCase();
+  if(!/\b(the|a|an)\b/.test(lower)&&text.split(' ').length>5)
+    errors.push({tag:'grammar/article',detail:'Consider adding articles where appropriate'});
+  if(/\bi (is|was|are)\b/i.test(text))
+    errors.push({tag:'grammar/agreement',detail:'Subject-verb agreement issue detected'});
+  if(text.split(' ').length>25&&!text.includes('.'))
+    errors.push({tag:'structure/run_on',detail:'Consider breaking this into shorter sentences'});
+  if(!errors.length&&Math.random()>.5)
+    errors.push({tag:'expression/awkward',detail:'Some phrasing could be more natural'});
+
+  const corrected=text.charAt(0).toUpperCase()+text.slice(1).replace(/\s+/g,' ').trim()+(text.endsWith('.')?'':'.');
+  const base={corrected,errors};
+  if(mode==='correct') return base;
+
+  const expressions=[
+    'To put it differently: '+corrected.replace(/\.$/,'')+" — though with greater nuance.",
+    'An alternative phrasing: '+text.split(' ').slice(0,5).join(' ')+'... [reframed with precision].'
+  ];
+  const summary='The core idea here is '+text.split(' ').slice(0,8).join(' ').toLowerCase()+'...';
+  if(mode==='expand') return {...base,expressions,summary};
+
+  const questions=[
+    'What assumptions underlie this thought — and what happens if you invert them?',
+    'How would someone who fundamentally disagrees with you articulate their position?'
+  ];
+  return {...base,expressions,summary,questions};
+}
+
+// ── EXPORT ──
+function doExport(fmt) {
+  const ctx=state.contexts.find(c=>c.id===state.activeCtxId);
+  if(!ctx) return;
+  let content,filename,mime;
+  if(fmt==='md') {
+    content=`# ${ctx.title}\n\n`;
+    if(ctx.raw_content) content+=`> ${ctx.raw_content}\n\n---\n\n`;
+    ctx.sessions.forEach(s=>{
+      content+=`## Session — ${new Date(s.created_at).toISOString().split('T')[0]} [${s.mode}]\n\n`;
+      content+=`**Original:**\n${s.original}\n\n**Corrected:**\n${s.corrected}\n\n`;
+      if(s.expressions) content+=`**Expressions:**\n${s.expressions.map(e=>`- ${e}`).join('\n')}\n\n`;
+      if(s.summary) content+=`**Summary:**\n${s.summary}\n\n`;
+      if(s.errors?.length) content+=`**Errors:** ${s.errors.map(e=>e.tag).join(', ')}\n\n`;
+      content+=`---\n\n`;
+    });
+    filename=ctx.title.replace(/[^a-zA-Z0-9]/g,'_')+'.md'; mime='text/markdown';
+  } else {
+    content=JSON.stringify(ctx,null,2);
+    filename=ctx.title.replace(/[^a-zA-Z0-9]/g,'_')+'.json'; mime='application/json';
+  }
+  const blob=new Blob([content],{type:mime});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=filename; a.click();
+}
+
+// ── RENDER ──
+function render() {
+  applyTheme(state.theme);
+  renderThemeBtns();
+  renderModeSettingBtns();
+  renderCtxList();
+  renderMain();
+}
+
+function renderThemeBtns() {
+  const c=document.getElementById('theme-btns'); c.innerHTML='';
+  Object.entries(THEMES).forEach(([key,t])=>{
+    const b=document.createElement('button');
+    b.className='sb-settings-btn'+(state.theme===key?' active':'');
+    b.textContent=t.name;
+    b.onclick=()=>{state.theme=key;render();};
+    c.appendChild(b);
+  });
+}
+
+function renderModeSettingBtns() {
+  const c=document.getElementById('mode-setting-btns'); c.innerHTML='';
+  ['correct','expand','deep'].forEach(m=>{
+    const b=document.createElement('button');
+    b.className='sb-settings-btn'+(state.mode===m?' active':'');
+    b.textContent=m;
+    b.onclick=()=>{state.mode=m;render();};
+    c.appendChild(b);
+  });
+}
+
+function renderCtxList() {
+  const c=document.getElementById('ctx-list'); c.innerHTML='';
+  state.contexts.forEach(ctx=>{
+    const d=document.createElement('div');
+    d.className='ctx-item'+(state.activeCtxId===ctx.id?' active':'');
+    d.innerHTML=`
+      <div class="ctx-title">${esc(ctx.title)}</div>
+      <div class="ctx-meta">
+        <span>${fmtDate(ctx.created_at)} · ${ctx.sessions.length}</span>
+        <button class="ctx-del" data-id="${ctx.id}">×</button>
+      </div>`;
+    d.onclick=(e)=>{
+      if(e.target.classList.contains('ctx-del')) return;
+      state.activeCtxId=ctx.id; render();
+    };
+    d.querySelector('.ctx-del').onclick=(e)=>{
+      e.stopPropagation();
+      state.contexts=state.contexts.filter(c2=>c2.id!==ctx.id);
+      if(state.activeCtxId===ctx.id) state.activeCtxId=state.contexts[0]?.id||null;
+      render();
+    };
+    c.appendChild(d);
+  });
+}
+
+function renderMain() {
+  const ctx=state.contexts.find(c=>c.id===state.activeCtxId);
+  const empty=document.getElementById('main-empty');
+  const content=document.getElementById('main-content');
+
+  if(!ctx) { empty.style.display='flex'; content.style.display='none'; return; }
+  empty.style.display='none'; content.style.display='flex';
+
+  document.getElementById('main-title').textContent=ctx.title;
+  const preview=document.getElementById('main-preview');
+  preview.textContent=ctx.raw_content||'';
+  preview.style.display=ctx.raw_content?'block':'none';
+
+  // Mode toggle
+  const mt=document.getElementById('mode-toggle'); mt.innerHTML='';
+  ['correct','expand','deep'].forEach(m=>{
+    const b=document.createElement('button');
+    b.className='mode-btn'+(state.mode===m?' active':'');
+    b.textContent=m;
+    b.onclick=()=>{state.mode=m;render();};
+    mt.appendChild(b);
+  });
+  document.getElementById('mode-desc').textContent=MODE_DESC[state.mode];
+
+  // Submit button state
+  const input=document.getElementById('thought-input');
+  const btn=document.getElementById('submit-btn');
+  const updateBtn=()=>{
+    if(input.value.trim()&&!state.loading){btn.classList.add('active');btn.textContent='SUBMIT';}
+    else{btn.classList.remove('active');btn.textContent=state.loading?'...':'SUBMIT';}
+  };
+  input.oninput=updateBtn;
+  input.onkeydown=(e)=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();submit();}};
+  updateBtn();
+
+  // Sessions
+  renderSessions(ctx);
+}
+
+function renderSessions(ctx) {
+  const c=document.getElementById('session-list'); c.innerHTML='';
+  if(!ctx.sessions.length){
+    c.innerHTML='<div class="session-empty">No sessions yet. Write your first thought above.</div>';
+    return;
+  }
+  ctx.sessions.forEach(s=>{
+    const d=document.createElement('div');
+    d.className='session';
+    d.innerHTML=`
+      <div class="session-row">
+        <div style="flex:1;min-width:0">
+          <div class="session-original">${esc(s.original)}</div>
+          <div class="session-meta">
+            <span>${fmtDate(s.created_at)}</span>
+            <span class="session-mode">${MODE_LABEL[s.mode]}</span>
+          </div>
+        </div>
+        <span class="session-arrow">▶</span>
+      </div>
+      <div class="session-detail">${buildDetail(s)}</div>`;
+    d.onclick=()=>{d.classList.toggle('expanded');};
+    c.appendChild(d);
+  });
+}
+
+function buildDetail(s) {
+  let h='';
+  // Corrected
+  h+=`<div class="sd-section"><div class="sd-label">Corrected</div><div class="sd-corrected">${esc(s.corrected)}</div></div>`;
+  // Errors
+  if(s.errors?.length){
+    h+='<div class="sd-section"><div class="sd-label">Errors</div><div class="sd-tags">';
+    s.errors.forEach(e=>{h+=`<span class="sd-tag">${esc(e.tag.split('/')[1])}</span>`;});
+    h+='</div>';
+    s.errors.forEach(e=>{h+=`<div class="sd-error-detail">→ ${esc(e.detail)}</div>`;});
+    h+='</div>';
+  }
+  // Expressions
+  if(s.expressions?.length){
+    h+='<div class="sd-section"><div class="sd-label">Expressions</div>';
+    s.expressions.forEach(e=>{h+=`<div class="sd-expression">${esc(e)}</div>`;});
+    h+='</div>';
+  }
+  // Summary
+  if(s.summary) h+=`<div class="sd-section"><div class="sd-label">Summary</div><div class="sd-summary">${esc(s.summary)}</div></div>`;
+  // Questions
+  if(s.questions?.length){
+    h+='<div class="sd-section"><div class="sd-label">Questions</div>';
+    s.questions.forEach(q=>{h+=`<div class="sd-question">? ${esc(q)}</div>`;});
+    h+='</div>';
+  }
+  return h;
+}
+
+// ── SEARCH ──
+function doSearch(query) {
+  const sr=document.getElementById('search-results');
+  const cl=document.getElementById('ctx-list');
+  if(!query.trim()){sr.style.display='none';cl.style.display='block';return;}
+  cl.style.display='none'; sr.style.display='block';
+
+  const results=[];
+  state.contexts.forEach(c=>{
+    c.sessions.forEach(s=>{
+      if([s.original,s.corrected,s.summary].some(f=>f&&f.toLowerCase().includes(query.toLowerCase())))
+        results.push({...s,contextTitle:c.title,contextId:c.id});
+    });
+  });
+
+  sr.innerHTML=`<div class="sr-count">${results.length} result${results.length!==1?'s':''}</div>`;
+  results.forEach(r=>{
+    const d=document.createElement('div');
+    d.className='sr-item';
+    d.innerHTML=`<div class="sr-text">${esc(r.original)}</div><div class="sr-meta">${esc(r.contextTitle)}</div>`;
+    d.onclick=()=>{
+      state.activeCtxId=r.contextId;
+      document.getElementById('search-input').value='';
+      document.getElementById('sb-search').classList.remove('open');
+      document.getElementById('search-results').style.display='none';
+      document.getElementById('ctx-list').style.display='block';
+      render();
+    };
+    sr.appendChild(d);
+  });
+}
+
+// ── SUBMIT ──
+function submit() {
+  const input=document.getElementById('thought-input');
+  const text=input.value.trim();
+  if(!text||!state.activeCtxId||state.loading) return;
+
+  state.loading=true;
+  document.getElementById('submit-btn').classList.remove('active');
+  document.getElementById('submit-btn').textContent='...';
+
+  setTimeout(()=>{
+    const response=mockAI(text,state.mode);
+    const session={id:uid(),mode:state.mode,created_at:Date.now(),original:text,...response};
+    const ctx=state.contexts.find(c=>c.id===state.activeCtxId);
+    if(ctx) ctx.sessions.unshift(session);
+    state.loading=false;
+    input.value='';
+    render();
+  }, 400+Math.random()*600);
+}
+
+// ── EVENTS ──
+document.getElementById('search-toggle').onclick=()=>{
+  const s=document.getElementById('sb-search');
+  s.classList.toggle('open');
+  if(!s.classList.contains('open')){
+    document.getElementById('search-input').value='';
+    document.getElementById('search-results').style.display='none';
+    document.getElementById('ctx-list').style.display='block';
+  } else {
+    document.getElementById('search-input').focus();
+  }
+};
+document.getElementById('settings-toggle').onclick=()=>{
+  document.getElementById('sb-settings').classList.toggle('open');
+};
+document.getElementById('search-input').oninput=(e)=>doSearch(e.target.value);
+
+document.getElementById('new-ctx-btn').onclick=()=>{
+  document.getElementById('new-ctx-form').classList.add('open');
+  document.getElementById('new-ctx-btn').style.display='none';
+  document.getElementById('ncf-title').focus();
+};
+document.getElementById('ncf-cancel').onclick=()=>{
+  document.getElementById('new-ctx-form').classList.remove('open');
+  document.getElementById('new-ctx-btn').style.display='block';
+  document.getElementById('ncf-title').value='';
+  document.getElementById('ncf-content').value='';
+};
+document.getElementById('ncf-create').onclick=()=>{
+  const title=document.getElementById('ncf-title').value.trim();
+  if(!title) return;
+  const content=document.getElementById('ncf-content').value.trim();
+  const ctx={id:uid(),title,raw_content:content,created_at:Date.now(),sessions:[]};
+  state.contexts.unshift(ctx);
+  state.activeCtxId=ctx.id;
+  document.getElementById('ncf-title').value='';
+  document.getElementById('ncf-content').value='';
+  document.getElementById('new-ctx-form').classList.remove('open');
+  document.getElementById('new-ctx-btn').style.display='block';
+  render();
+};
+document.getElementById('ncf-title').onkeydown=(e)=>{
+  if(e.key==='Enter'){e.preventDefault();document.getElementById('ncf-create').click();}
+};
+document.getElementById('export-md').onclick=()=>doExport('md');
+document.getElementById('export-json').onclick=()=>doExport('json');
+document.getElementById('submit-btn').onclick=submit;
+
+// ── INIT ──
+state.activeCtxId='demo-1';
+render();
+</script>
+</body>
+</html>
