@@ -36,6 +36,76 @@ When asked about a word or phrase: give its meaning and connotation, the relevan
 
 Answer in Korean by default (the reader is studying English, so explanation in Korean lands better); keep English words, phrases, and grammatical terms in English. If the reader writes to you in English, you may answer in English.`;
 
+// === 사유 (reflection) mode ===
+// The reader writes their own prose (in English, Korean, or mixed) and asks for
+// a corrected version + a list of mistakes, explained in Korean. JSON only.
+const REFLECT_CORRECT_PROMPT = `You are a bilingual writing tutor for a Korean speaker who is practicing serious prose — literary reflection, journaling, criticism. The reader writes in English, Korean, or a mix. Your job: correct the mistakes and explain — in Korean — what was wrong and why.
+
+Be precise and concise. Fix what is wrong; do not rewrite for style. Preserve the writer's voice and word choices. Stay in the language they wrote in (if the input is English, the corrected version is English; if Korean, Korean; if mixed, mixed). Quote only the smallest fragment needed when explaining a specific mistake.
+
+Return STRICT JSON only — no markdown fences, no prose before or after. Schema:
+
+{
+  "corrected": "<the reader's text with mistakes fixed, same language as input>",
+  "errors": [
+    {"tag": "grammar/article", "detail": "<한국어로 무엇이 틀렸고 왜 틀렸는지>"}
+  ]
+}
+
+Use ONLY these error tags:
+grammar/tense, grammar/article, grammar/agreement, grammar/preposition, grammar/other,
+expression/awkward, expression/word_choice,
+structure/fragment, structure/run_on, structure/clarity
+
+If there are no errors, return errors: []. Return ONLY the JSON object — no text before or after, no code fences.`;
+
+function buildReflectionSystem(ctx: any, mode: string): string {
+  let base = REFLECT_CORRECT_PROMPT; // only "correct" for now; expand/deep land later
+  if (!ctx || typeof ctx !== "object") return base;
+  const src = [ctx.author, ctx.title].filter(Boolean).join(" · ");
+  if (src) base += `\n\n--- Context: the reader is reflecting on / responding to ---\n${src}`;
+  return base;
+}
+
+function parseReflectJSON(text: string): any | null {
+  if (!text) return null;
+  let s = text.trim();
+  // strip optional code fences
+  s = s.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+  // try direct parse
+  try { return JSON.parse(s); } catch { /* fall through */ }
+  // try to locate the first {...} block
+  const m = /\{[\s\S]*\}/.exec(s);
+  if (m) { try { return JSON.parse(m[0]); } catch { /* fall through */ } }
+  return null;
+}
+
+function normalizeReflectResult(parsed: any, mode: string, fallbackText: string) {
+  const out: any = { mode, corrected: "", errors: [], expressions: [], summary: "", questions: [] };
+  if (parsed && typeof parsed === "object") {
+    if (typeof parsed.corrected === "string") out.corrected = parsed.corrected;
+    if (Array.isArray(parsed.errors)) {
+      out.errors = parsed.errors
+        .filter((x: any) => x && typeof x === "object")
+        .map((x: any) => ({
+          tag: typeof x.tag === "string" ? x.tag : "grammar/other",
+          detail: typeof x.detail === "string" ? x.detail : "",
+        }))
+        .slice(0, 20);
+    }
+    if (Array.isArray(parsed.expressions)) {
+      out.expressions = parsed.expressions.filter((x: any) => typeof x === "string").slice(0, 6);
+    }
+    if (typeof parsed.summary === "string") out.summary = parsed.summary;
+    if (Array.isArray(parsed.questions)) {
+      out.questions = parsed.questions.filter((x: any) => typeof x === "string").slice(0, 4);
+    }
+  }
+  // If parsing failed entirely, surface the raw text so the UI can still show *something*
+  if (!parsed && fallbackText) out.corrected = fallbackText;
+  return out;
+}
+
 // Appended to the system prompt when the frontend asks for structured "picks" —
 // the words/phrases the reader was unsure about, so they can be filed in 나의 단어 / 나의 문장.
 const EXTRACT_INSTRUCTION = `
@@ -133,9 +203,17 @@ Deno.serve(async (req) => {
     .filter((m: any) => m.content.trim().length > 0);
   if (!messages.length) return json({ error: "No non-empty messages to send." }, 400);
 
-  const extract = payload?.extract === true;
-  let system = buildSystem(payload?.context);
-  if (extract) system += `\n${EXTRACT_INSTRUCTION}`;
+  const reflect = typeof payload?.reflect === "string" ? payload.reflect : "";
+  const isReflect = reflect === "correct" || reflect === "expand" || reflect === "deep";
+  const extract = !isReflect && payload?.extract === true;
+
+  let system: string;
+  if (isReflect) {
+    system = buildReflectionSystem(payload?.context, reflect);
+  } else {
+    system = buildSystem(payload?.context);
+    if (extract) system += `\n${EXTRACT_INSTRUCTION}`;
+  }
 
   let resp: Response;
   try {
@@ -171,6 +249,11 @@ Deno.serve(async (req) => {
 
   if (!text) return json({ error: "Empty response from Claude.", raw: out }, 502);
 
+  if (isReflect) {
+    const parsed = parseReflectJSON(text);
+    const result = normalizeReflectResult(parsed, reflect, parsed ? "" : text);
+    return json({ reflect: result, model: out?.model ?? MODEL, usage: out?.usage ?? null });
+  }
   if (extract) {
     const { reply, picks } = splitPicks(text);
     return json({ text: reply, picks, model: out?.model ?? MODEL, usage: out?.usage ?? null });

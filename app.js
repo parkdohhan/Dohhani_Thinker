@@ -118,34 +118,71 @@
 
   function newVault() { return { entries: [], terms: [], settings: { artAesthetic: "cha", curatorNote: "", unpublishedIds: [] } }; }
 
-  function blankEntry() {
+  function blankEntry(kind) {
+    kind = kind === "reflection" ? "reflection" : "transcription";
     const t = nowISO();
-    return {
+    const base = {
       id: uid(), date: todayISO(),
+      kind,
       source: { author: "", title: "", page: "" },
-      body: "", highlights: [], interpretation: "", corrections: [], threads: [],
       createdAt: t, updatedAt: t,
+    };
+    if (kind === "reflection") {
+      base.reflection = { mode: "correct", body: "", revisions: [] };
+    } else {
+      base.body = ""; base.highlights = []; base.interpretation = "";
+      base.corrections = []; base.threads = [];
+    }
+    return base;
+  }
+  function normRevision(r) {
+    r = r && typeof r === "object" ? r : {};
+    const m = r.mode === "expand" || r.mode === "deep" ? r.mode : "correct";
+    return {
+      timestamp: r.timestamp || nowISO(),
+      mode: m,
+      input: typeof r.input === "string" ? r.input : "",
+      corrected: typeof r.corrected === "string" ? r.corrected : "",
+      errors: Array.isArray(r.errors) ? r.errors
+        .filter((x) => x && typeof x === "object")
+        .map((x) => ({ tag: typeof x.tag === "string" ? x.tag : "grammar/other", detail: typeof x.detail === "string" ? x.detail : "" })) : [],
+      expressions: Array.isArray(r.expressions) ? r.expressions.filter((x) => typeof x === "string") : [],
+      summary: typeof r.summary === "string" ? r.summary : "",
+      questions: Array.isArray(r.questions) ? r.questions.filter((x) => typeof x === "string") : [],
     };
   }
   function normEntry(e) {
     e = e && typeof e === "object" ? e : {};
     const s = e.source && typeof e.source === "object" ? e.source : {};
-    return {
+    const kind = e.kind === "reflection" ? "reflection" : "transcription";
+    const out = {
       id: typeof e.id === "string" ? e.id : uid(),
       date: typeof e.date === "string" && e.date ? e.date.slice(0, 10) : todayISO(),
+      kind,
       source: { author: s.author || "", title: s.title || "", page: s.page || "" },
-      body: typeof e.body === "string" ? e.body : "",
-      highlights: Array.isArray(e.highlights) ? e.highlights.filter((h) => h && h.endChar > h.startChar).map((h) => ({
+      createdAt: e.createdAt || nowISO(),
+      updatedAt: e.updatedAt || e.createdAt || nowISO(),
+    };
+    if (kind === "reflection") {
+      const r = e.reflection && typeof e.reflection === "object" ? e.reflection : {};
+      out.reflection = {
+        mode: r.mode === "expand" || r.mode === "deep" ? r.mode : "correct",
+        body: typeof r.body === "string" ? r.body : "",
+        revisions: Array.isArray(r.revisions) ? r.revisions.map(normRevision) : [],
+      };
+    } else {
+      out.body = typeof e.body === "string" ? e.body : "";
+      out.highlights = Array.isArray(e.highlights) ? e.highlights.filter((h) => h && h.endChar > h.startChar).map((h) => ({
         id: h.id || uid(), startChar: h.startChar | 0, endChar: h.endChar | 0,
         type: h.type === "blue" ? "blue" : "yellow", note: h.note || "",
-      })) : [],
-      interpretation: typeof e.interpretation === "string" ? e.interpretation : "",
-      corrections: Array.isArray(e.corrections) ? e.corrections.filter((c) => c && typeof c === "object").map((c) => ({
+      })) : [];
+      out.interpretation = typeof e.interpretation === "string" ? e.interpretation : "";
+      out.corrections = Array.isArray(e.corrections) ? e.corrections.filter((c) => c && typeof c === "object").map((c) => ({
         timestamp: c.timestamp || nowISO(), previousText: c.previousText || "", newText: c.newText || "",
-      })) : [],
-      threads: Array.isArray(e.threads) ? e.threads.map(normThread) : (Array.isArray(e.messages) ? migrateMessages(e.messages) : []),
-      createdAt: e.createdAt || nowISO(), updatedAt: e.updatedAt || e.createdAt || nowISO(),
-    };
+      })) : [];
+      out.threads = Array.isArray(e.threads) ? e.threads.map(normThread) : (Array.isArray(e.messages) ? migrateMessages(e.messages) : []);
+    }
+    return out;
   }
   function normThread(t) {
     t = t && typeof t === "object" ? t : {};
@@ -223,8 +260,11 @@
   function termEncountersSorted(t) { return [...t.encounters].sort((a, b) => a.date.localeCompare(b.date)); }
   function termClaudeNotes(word) {
     const out = [];
-    for (const e of state.entries) for (const th of e.threads) {
-      if (normWord(th.anchorText) === word) for (const m of th.messages) if (m.role === "assistant") out.push({ entry: e, thread: th, msg: m });
+    for (const e of state.entries) {
+      if (e.kind === "reflection") continue;
+      for (const th of e.threads) {
+        if (normWord(th.anchorText) === word) for (const m of th.messages) if (m.role === "assistant") out.push({ entry: e, thread: th, msg: m });
+      }
     }
     return out;
   }
@@ -244,13 +284,20 @@
 
   /* ─────────────────────── SUPABASE I/O ─────────────────────── */
   function entryToRow(e) {
-    return { id: e.id, user_id: user.id, entry_date: e.date, updated_at: e.updatedAt, created_at: e.createdAt,
-      data: { source: e.source, body: e.body, highlights: e.highlights, interpretation: e.interpretation, corrections: e.corrections, threads: e.threads } };
+    const data = { kind: e.kind || "transcription", source: e.source };
+    if (e.kind === "reflection") {
+      data.reflection = e.reflection || { mode: "correct", body: "", revisions: [] };
+    } else {
+      data.body = e.body; data.highlights = e.highlights;
+      data.interpretation = e.interpretation; data.corrections = e.corrections; data.threads = e.threads;
+    }
+    return { id: e.id, user_id: user.id, entry_date: e.date, updated_at: e.updatedAt, created_at: e.createdAt, data };
   }
   function rowToEntry(r) {
     const d = r.data || {};
-    return normEntry({ id: r.id, date: r.entry_date, source: d.source, body: d.body, highlights: d.highlights,
-      interpretation: d.interpretation, corrections: d.corrections, threads: d.threads, messages: d.messages,
+    return normEntry({ id: r.id, date: r.entry_date, kind: d.kind, source: d.source,
+      body: d.body, highlights: d.highlights, interpretation: d.interpretation, corrections: d.corrections,
+      threads: d.threads, messages: d.messages, reflection: d.reflection,
       createdAt: r.created_at, updatedAt: r.updated_at });
   }
   async function pullAll() {
@@ -357,13 +404,18 @@
   function bindRefs() {
     [
       "authView","authForm","authEmail","authPassword","authSubmit","authMsg","authSwitch","authNote",
-      "app","sidebar","sidebarToggle","wordmark","syncDot","newEntryBtn","searchBtn","wordsBtn","sentencesBtn","artBtn",
+      "app","sidebar","sidebarToggle","wordmark","syncDot","newEntryBtn","searchBtn","wordsBtn","sentencesBtn",
       "wordsCount","sentencesCount","recentList","exportBtn","importBtn","signOutBtn","importInput","sidebarReopen","main",
       "emptyState","emptyNewBtn","entryView","entryDate","entryWeekday","entryStatus","deleteEntryBtn","srcAuthor","srcTitle","srcPage",
       "bodyField","bodyRender","bodyEditWrap","bodyBackdrop","bodyInput","hlToolbar","bodyHint","interpInput","interpSend","interpRevisions",
       "claudePanel","claudeHead","claudeTitle","claudeChevron","claudeBody","threadList","claudeCompose","claudeInput","claudeSend","claudeWarn",
+      "reflectView","reflectDate","reflectWeekday","reflectStatus","reflectDeleteBtn","reflectAuthor","reflectTitle",
+      "reflectModes","reflectModeDesc","reflectBody","reflectSend","reflectRevCount",
+      "reflectResponse","reflectCorrected","reflectErrorsH","reflectErrors","reflectRespTs",
       "wordsView","wordsSub","wordsFilter","wordsSort","wordsGrid","sentencesView","sentencesSub","sentencesFilter","sentenceList",
-      "artView","artToolbar","artCuratorEditBtn","artExitBtn","artScroll",
+      "thoughtsBtn","thoughtsCount","thoughtsView","thoughtsSub","thoughtsFilter","thoughtList",
+      "projectsBtn","projectsCount","projectsView","projectsSort","projectsFilter","projectsGrid","projectsKindFilter","projectsNewBtn",
+      "projectDetailView","projectBackBtn","projectCuratorEditBtn","projectArtScroll",
       "searchScrim","searchInput","searchClose","searchFilters","chipColor","chipClaude","chipFrom","chipTo","chipAuthor","searchResults",
       "modalScrim","modalClose","modalTitle","modalBody","modalActions","wordTip","toast",
     ].forEach((id) => (D[id] = $(id)));
@@ -410,41 +462,101 @@
   function renderRoute() {
     if (!user) return;
     const { name } = parseHash();
-    [D.emptyState, D.entryView, D.wordsView, D.sentencesView, D.artView].forEach((v) => (v.hidden = true));
+    [D.emptyState, D.entryView, D.reflectView, D.wordsView, D.sentencesView, D.thoughtsView, D.projectsView, D.projectDetailView].forEach((v) => (v.hidden = true));
     D.searchScrim.hidden = true;
-    [D.searchBtn, D.wordsBtn, D.sentencesBtn, D.artBtn].forEach((b) => b.classList.remove("is-on"));
+    [D.searchBtn, D.wordsBtn, D.sentencesBtn, D.thoughtsBtn, D.projectsBtn].forEach((b) => b.classList.remove("is-on"));
     if (name === "words") { D.wordsBtn.classList.add("is-on"); D.wordsView.hidden = false; renderWordsView(); }
     else if (name === "sentences") { D.sentencesBtn.classList.add("is-on"); D.sentencesView.hidden = false; renderSentencesView(); }
-    else if (name === "art") { D.artBtn.classList.add("is-on"); D.artView.hidden = false; renderArtView(); }
+    else if (name === "thoughts") { D.thoughtsBtn.classList.add("is-on"); D.thoughtsView.hidden = false; renderThoughtsView(); }
+    else if (name === "projects" || name === "art") {
+      // legacy #art redirects to projects grid
+      D.projectsBtn.classList.add("is-on");
+      const { arg } = parseHash();
+      if (name === "projects" && arg && arg.length) { D.projectDetailView.hidden = false; renderProjectDetailView(arg[0]); }
+      else { D.projectsView.hidden = false; renderProjectsView(); }
+    }
     else { showDaily(); }
     if (name !== "daily" && name !== "") D.main.scrollTop = 0;
   }
   function showDaily() {
     D.main.scrollTop = 0;
-    if (!state.entries.length) { D.emptyState.hidden = false; D.entryView.hidden = true; return; }
+    if (!state.entries.length) { D.emptyState.hidden = false; D.entryView.hidden = true; D.reflectView.hidden = true; return; }
     if (!currentEntry()) {
       let openId = null;
       try { openId = localStorage.getItem(lastOpenKey()); } catch (_) {}
       currentId = openId && findEntry(openId) ? openId : (orderedEntries()[0] || {}).id || null;
     }
-    if (!currentEntry()) { D.emptyState.hidden = false; return; }
-    D.emptyState.hidden = true; D.entryView.hidden = false;
-    renderEntry();
+    const e = currentEntry();
+    if (!e) { D.emptyState.hidden = false; return; }
+    D.emptyState.hidden = true;
+    if (e.kind === "reflection") {
+      D.entryView.hidden = true; D.reflectView.hidden = false;
+      renderReflectEntry();
+    } else {
+      D.reflectView.hidden = true; D.entryView.hidden = false;
+      renderEntry();
+    }
   }
 
   /* ─────────────────────── DAILY: ENTRY ─────────────────────── */
   function rememberOpen() { try { if (currentId) localStorage.setItem(lastOpenKey(), currentId); } catch (_) {} }
 
-  function newEntry() {
+  function newEntry(kind, presetSource) {
+    // No-arg call (e.g. from button click — event is the arg) → open picker
+    if (typeof kind !== "string") { openNewDocPicker(); return; }
     captureInterpCorrection();
-    const e = blankEntry();
+    const e = blankEntry(kind);
+    if (presetSource && typeof presetSource === "object") {
+      if (typeof presetSource.author === "string") e.source.author = presetSource.author;
+      if (typeof presetSource.title === "string") e.source.title = presetSource.title;
+      if (typeof presetSource.page === "string") e.source.page = presetSource.page;
+    }
     state.entries.push(e);
     currentId = e.id; activeThreadId = null;
     touchEntry(e); rememberOpen();
     if (parseHash().name !== "daily") location.hash = "#daily";
     else { showDaily(); renderRecentList(); }
+    renderSidebarCounts();
     autoCloseSidebarIfNarrow();
-    D.srcAuthor.focus();
+    // Focus where it makes sense: if a project was pre-set, jump into the body so the user starts writing
+    if (presetSource && (presetSource.author || presetSource.title)) {
+      setTimeout(() => {
+        try {
+          if (kind === "reflection") D.reflectBody.focus();
+          else D.bodyInput.focus();
+        } catch (_) {}
+      }, 0);
+    } else if (kind === "reflection") setTimeout(() => { try { D.reflectAuthor.focus(); } catch (_) {} }, 0);
+    else D.srcAuthor.focus();
+  }
+  function openNewDocPicker() {
+    const wrap = document.createElement("div");
+    wrap.className = "doc-picker";
+    wrap.innerHTML =
+      `<button type="button" class="doc-picker-card" data-kind="transcription">
+        <span class="doc-picker-name">필사</span>
+        <span class="doc-picker-desc">남의 글을 옮겨 적고 해석합니다.<br/>본문 · 하이라이트 · 한국어 해석 · △ 묻기.</span>
+        <span class="doc-picker-kbd">⌘1</span>
+      </button>
+      <button type="button" class="doc-picker-card" data-kind="reflection">
+        <span class="doc-picker-name">사유</span>
+        <span class="doc-picker-desc">내 생각을 직접 적고 다듬습니다.<br/>영어·한국어 자유. Claude가 교정·지적해 줍니다.</span>
+        <span class="doc-picker-kbd">⌘2</span>
+      </button>`;
+    function pick(kind) { closeModal(); document.removeEventListener("keydown", onKey, true); newEntry(kind); }
+    wrap.addEventListener("click", (ev) => {
+      const card = ev.target.closest(".doc-picker-card");
+      if (card) pick(card.dataset.kind);
+    });
+    function onKey(ev) {
+      if (D.modalScrim.hidden) { document.removeEventListener("keydown", onKey, true); return; }
+      if ((ev.metaKey || ev.ctrlKey) && (ev.key === "1" || ev.key === "2")) {
+        ev.preventDefault();
+        pick(ev.key === "1" ? "transcription" : "reflection");
+      }
+    }
+    document.addEventListener("keydown", onKey, true);
+    openModal("어떤 문서를 시작할까요?", wrap);
   }
   function openEntry(id) {
     if (id === currentId && parseHash().name === "daily") return;
@@ -457,8 +569,9 @@
   }
   function deleteCurrentEntry() {
     const e = currentEntry(); if (!e) return;
+    const kindLabel = e.kind === "reflection" ? "사유" : "필사";
     const label = srcLabel(e) || e.date;
-    if (!confirm(`이 필사를 삭제할까요?\n\n${label}\n\n되돌릴 수 없습니다.`)) return;
+    if (!confirm(`이 ${kindLabel}을(를) 삭제할까요?\n\n${label}\n\n되돌릴 수 없습니다.`)) return;
     state.entries = state.entries.filter((x) => x.id !== e.id);
     deletedEntries.add(e.id); dirtyEntries.delete(e.id);
     pruneEntryFromTerms(e.id);
@@ -466,7 +579,7 @@
     currentId = nx ? nx.id : null;
     scheduleSync(); cacheLocal();
     renderRecentList(); showDaily(); renderSidebarCounts();
-    toast("필사를 삭제했습니다");
+    toast(`${kindLabel}을 삭제했습니다`);
   }
   function srcLabel(e) {
     const p = [e.source.author, e.source.title].filter(Boolean);
@@ -497,6 +610,106 @@
     D.claudeInput.value = ""; autoGrow(D.claudeInput, 160);
     D.claudeWarn.hidden = true;
     D.claudePanel.classList.remove("open"); D.claudeBody.hidden = true;
+  }
+
+  /* ── reflection (사유) entry ── */
+  let reflectBusy = false;
+  function modeDesc(m) {
+    if (m === "expand") return "(곧) 교정 + 대안 표현 + 요지";
+    if (m === "deep") return "(곧) 교정 + 대안 + 요지 + 되묻는 질문";
+    return "문법·표현 교정과 한국어 설명";
+  }
+  function renderReflectEntry() {
+    const e = currentEntry(); if (!e || e.kind !== "reflection") return;
+    if (!e.reflection || typeof e.reflection !== "object") e.reflection = { mode: "correct", body: "", revisions: [] };
+    const r = e.reflection;
+
+    D.reflectDate.value = e.date;
+    D.reflectWeekday.textContent = weekdayOf(e.date) ? "· " + weekdayOf(e.date) : "";
+    D.reflectStatus.textContent = ""; D.reflectStatus.classList.remove("show");
+    D.reflectAuthor.value = e.source.author;
+    D.reflectTitle.value = e.source.title;
+    D.reflectBody.value = r.body;
+
+    D.reflectModes.querySelectorAll(".reflect-mode").forEach((b) => {
+      b.classList.toggle("is-on", b.dataset.mode === r.mode);
+    });
+    D.reflectModeDesc.textContent = modeDesc(r.mode);
+
+    D.reflectSend.disabled = reflectBusy;
+    { const lbl = D.reflectSend.querySelector(".reflect-send-label"); if (lbl) lbl.textContent = reflectBusy ? "보내는 중…" : "Claude에게 보내기"; }
+    D.reflectRevCount.textContent = r.revisions.length ? `${r.revisions.length}회 보냄` : "";
+
+    const last = r.revisions.length ? r.revisions[r.revisions.length - 1] : null;
+    renderReflectResponse(last);
+  }
+  function renderReflectResponse(rev) {
+    if (!rev) { D.reflectResponse.hidden = true; return; }
+    D.reflectResponse.hidden = false;
+    D.reflectCorrected.textContent = rev.corrected || "(교정본 없음)";
+    if (rev.errors && rev.errors.length) {
+      D.reflectErrorsH.hidden = false;
+      D.reflectErrors.innerHTML = rev.errors.map((er) =>
+        `<li><span class="reflect-err-tag">${esc(er.tag)}</span><span class="reflect-err-detail">${esc(er.detail)}</span></li>`
+      ).join("");
+    } else {
+      D.reflectErrorsH.hidden = true;
+      D.reflectErrors.innerHTML = `<li><span class="reflect-err-tag" style="background:transparent;border:none;color:var(--color-text-tertiary);padding:0;">— 지적할 것이 없습니다.</span></li>`;
+    }
+    D.reflectRespTs.textContent = rev.timestamp ? fmtDate(rev.timestamp) + " " + String(rev.timestamp).slice(11, 16) : "";
+  }
+  async function sendReflection(modeArg) {
+    if (reflectBusy) return;
+    const e = currentEntry(); if (!e || e.kind !== "reflection") return;
+    if (!e.reflection) e.reflection = { mode: "correct", body: "", revisions: [] };
+    const r = e.reflection;
+    r.body = D.reflectBody.value;
+    const text = r.body.trim();
+    if (!text) { D.reflectBody.focus(); toast("먼저 본문을 적어 주세요"); return; }
+    const mode = modeArg === "expand" || modeArg === "deep" ? modeArg : "correct"; // only 'correct' actually supported on the server for now
+    r.mode = mode;
+    touchEntry(e);
+
+    reflectBusy = true;
+    D.reflectSend.disabled = true;
+    const lbl = D.reflectSend.querySelector(".reflect-send-label");
+    if (lbl) lbl.textContent = "보내는 중…";
+
+    try {
+      const { data: sess } = await sb.auth.getSession();
+      const tok = sess && sess.session ? sess.session.access_token : null;
+      if (!tok) throw new Error("로그인이 필요합니다");
+      const context = { author: e.source.author || "", title: e.source.title || "" };
+      const resp = await fetch(CLAUDE_FN, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", apikey: SUPABASE_KEY, Authorization: `Bearer ${tok}` },
+        body: JSON.stringify({ messages: [{ role: "user", content: text }], context, reflect: mode }),
+      });
+      const out = await resp.json().catch(() => ({}));
+      if (!resp.ok || out.error) throw new Error((out && out.error) ? out.error : `요청 실패 (${resp.status})`);
+      const rr = out.reflect || {};
+      const rev = normRevision({
+        timestamp: nowISO(), mode,
+        input: text,
+        corrected: rr.corrected || "",
+        errors: rr.errors || [],
+        expressions: rr.expressions || [],
+        summary: rr.summary || "",
+        questions: rr.questions || [],
+      });
+      r.revisions.push(rev);
+      touchEntry(e);
+      renderReflectResponse(rev);
+      D.reflectRevCount.textContent = `${r.revisions.length}회 보냄`;
+      toast("교정 완료");
+      setTimeout(() => { try { D.reflectResponse.scrollIntoView({ behavior: "smooth", block: "start" }); } catch (_) {} }, 30);
+    } catch (err) {
+      toast("Claude 호출 실패 — " + (err.message || String(err)));
+    } finally {
+      reflectBusy = false;
+      D.reflectSend.disabled = false;
+      if (lbl) lbl.textContent = "Claude에게 보내기";
+    }
   }
 
   /* ── body: read-mode rendering ── */
@@ -678,6 +891,7 @@
     const sel = pendingSel, e = currentEntry();
     if (!sel || !e) return;
     if (type === "ask") { askClaudeAbout(sel.s, sel.e); return; }
+    const frag = type === "yellow" || type === "blue" ? e.body.slice(sel.s, sel.e).trim() : "";
     e.highlights = e.highlights.filter((h) => h.endChar <= sel.s || h.startChar >= sel.e);
     if (type !== "clear") {
       const hl = { id: uid(), startChar: sel.s, endChar: sel.e, type, note: "" };
@@ -687,8 +901,29 @@
     touchEntry(e);
     renderBackdrop();
     hideToolbar();
-    try { D.bodyInput.focus(); D.bodyInput.setSelectionRange(sel.e, sel.e); } catch (_) {}
+    if (frag) {
+      appendToInterp(frag);
+    } else {
+      try { D.bodyInput.focus(); D.bodyInput.setSelectionRange(sel.e, sel.e); } catch (_) {}
+    }
     flashStatus(type === "clear" ? "표시 지움" : "표시됨");
+  }
+  // append "<fragment> : " to the interp input, focus there, place caret after ": "
+  function appendToInterp(frag) {
+    const e = currentEntry(); if (!e) return;
+    const cur = D.interpInput.value;
+    const needsBreak = cur.length > 0 && !/\n\s*$/.test(cur);
+    const insert = (needsBreak ? "\n" : "") + frag + " : ";
+    const newVal = cur + insert;
+    D.interpInput.value = newVal;
+    e.interpretation = newVal;
+    autoGrow(D.interpInput);
+    touchEntry(e);
+    D.interpInput.focus();
+    const caret = newVal.length;
+    try { D.interpInput.setSelectionRange(caret, caret); } catch (_) {}
+    interpSnapshot = newVal;
+    D.interpInput.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }
   function askClaudeAbout(s, e2) {
     const e = currentEntry(); if (!e) return;
@@ -997,9 +1232,16 @@
   }
   function renderSidebarCounts() {
     D.wordsCount.textContent = state.terms.length ? String(state.terms.length) : "";
-    let sc = 0;
-    for (const e of state.entries) for (const t of e.threads) if (t.anchorText && t.messages.length) sc++;
+    let sc = 0, tc = 0;
+    const projectKeys = new Set();
+    for (const e of state.entries) {
+      projectKeys.add(projectKey(e));
+      if (e.kind === "reflection") { tc++; continue; }
+      for (const t of e.threads) if (t.anchorText && t.messages.length) sc++;
+    }
     D.sentencesCount.textContent = sc ? String(sc) : "";
+    D.thoughtsCount.textContent = tc ? String(tc) : "";
+    D.projectsCount.textContent = projectKeys.size ? String(projectKeys.size) : "";
   }
 
   /* ─────────────────────── 나의 단어 (dictionary) ─────────────────────── */
@@ -1058,9 +1300,12 @@
   let sentencesState = { filter: "", open: null };
   function gatherSentences() {
     const out = [];
-    for (const e of state.entries) for (const t of e.threads) {
-      if (!t.anchorText || !t.messages.length) continue;
-      out.push({ entry: e, thread: t, text: t.anchorText, date: e.date, createdAt: t.createdAt });
+    for (const e of state.entries) {
+      if (e.kind === "reflection") continue;
+      for (const t of e.threads) {
+        if (!t.anchorText || !t.messages.length) continue;
+        out.push({ entry: e, thread: t, text: t.anchorText, date: e.date, createdAt: t.createdAt });
+      }
     }
     out.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
     return out;
@@ -1103,6 +1348,253 @@
     </div>`;
   }
 
+  /* ─────────────────────── 프로젝트 ─────────────────────── */
+  let projectsState = { sort: "activity", filter: "", kind: "all" };
+  function projectKey(e) {
+    const a = (e.source && e.source.author || "").trim();
+    const t = (e.source && e.source.title || "").trim();
+    return a + "|" + t;
+  }
+  function getProjects() {
+    const map = new Map();
+    for (const e of state.entries) {
+      const key = projectKey(e);
+      let p = map.get(key);
+      if (!p) {
+        const [a, t] = key.split("|");
+        p = { key, author: a, title: t, entries: [], lastUpdated: 0, transcriptionCount: 0, reflectionCount: 0 };
+        map.set(key, p);
+      }
+      p.entries.push(e);
+      const u = +new Date(e.updatedAt || e.createdAt || 0);
+      if (u > p.lastUpdated) p.lastUpdated = u;
+      if (e.kind === "reflection") p.reflectionCount++;
+      else p.transcriptionCount++;
+    }
+    return Array.from(map.values());
+  }
+  function projectTitle(p) {
+    if (p.author && p.title) return `${p.author} · ${p.title}`;
+    return p.author || p.title || "출처 없음";
+  }
+  function humanAgo(ms) {
+    if (!ms) return "";
+    const now = Date.now();
+    const diff = Math.max(0, now - ms);
+    const day = 86400000;
+    const days = Math.floor(diff / day);
+    if (days <= 0) return "오늘";
+    if (days === 1) return "어제";
+    if (days === 2) return "그저께";
+    if (days < 30) return `${days}일 전`;
+    const months = Math.floor(days / 30);
+    if (months < 12) return `${months}개월 전`;
+    const years = Math.floor(months / 12);
+    return `${years}년 전`;
+  }
+  function projectExcerpt(p) {
+    const ordered = [...p.entries].sort((a, b) =>
+      (+new Date(b.updatedAt || b.createdAt || 0)) - (+new Date(a.updatedAt || a.createdAt || 0)));
+    for (const e of ordered) {
+      const t = e.kind === "reflection"
+        ? (e.reflection && e.reflection.body)
+        : e.body;
+      if (t && t.trim()) return t.trim().slice(0, 220);
+    }
+    return "—";
+  }
+  function renderProjectsView() {
+    D.projectsSort.value = projectsState.sort;
+    D.projectsFilter.value = projectsState.filter || "";
+    D.projectsKindFilter.querySelectorAll("button").forEach((b) => b.classList.toggle("is-on", b.dataset.kind === projectsState.kind));
+
+    const f = (projectsState.filter || "").trim().toLowerCase();
+    let list = getProjects();
+    if (projectsState.kind === "transcription") list = list.filter((p) => p.transcriptionCount > 0);
+    else if (projectsState.kind === "reflection") list = list.filter((p) => p.reflectionCount > 0);
+    if (f) list = list.filter((p) => projectTitle(p).toLowerCase().includes(f) || projectExcerpt(p).toLowerCase().includes(f));
+    if (projectsState.sort === "name") list.sort((a, b) => projectTitle(a).localeCompare(projectTitle(b), "ko"));
+    else if (projectsState.sort === "count") list.sort((a, b) => b.entries.length - a.entries.length);
+    else list.sort((a, b) => b.lastUpdated - a.lastUpdated);
+
+    if (!list.length) {
+      const msg = getProjects().length
+        ? "이 분류에는 아직 프로젝트가 없습니다."
+        : "아직 프로젝트가 없습니다.<br/>새 문서를 만들고 저자·작품을 적으면 자동으로 묶입니다.";
+      D.projectsGrid.innerHTML = `<div class="projects-empty">${msg}</div>`;
+      return;
+    }
+    D.projectsGrid.innerHTML = list.map((p) => {
+      const slug = encodeURIComponent(p.key);
+      const title = projectTitle(p);
+      const desc = projectExcerpt(p);
+      const total = p.entries.length;
+      const ago = humanAgo(p.lastUpdated);
+      return `<button type="button" class="project-card" data-project="${escAttr(slug)}">
+        <div class="project-card-title-row">
+          <span class="project-card-title">${esc(title)}</span>
+        </div>
+        <div class="project-card-desc">${esc(desc)}</div>
+        <div class="project-card-foot">
+          <span>${total}개</span>
+          ${p.transcriptionCount ? `<span class="dot-sep">·</span><span>필사 ${p.transcriptionCount}</span>` : ""}
+          ${p.reflectionCount ? `<span class="dot-sep">·</span><span>사유 ${p.reflectionCount}</span>` : ""}
+          ${ago ? `<span class="dot-sep">·</span><span>${esc(ago)} 업데이트됨</span>` : ""}
+        </div>
+      </button>`;
+    }).join("");
+  }
+  function renderProjectDetailView(slugRaw) {
+    let key;
+    try { key = decodeURIComponent(slugRaw || ""); } catch (_) { key = slugRaw || ""; }
+    const all = getProjects();
+    const p = all.find((x) => x.key === key);
+    if (!p) {
+      D.projectArtScroll.innerHTML = `<div class="art-empty">— 이 프로젝트가 없습니다. 엔트리가 모두 삭제되었거나 출처가 바뀌었습니다. —</div>`;
+      return;
+    }
+    renderProjectArchive(p, D.projectArtScroll);
+  }
+  function renderProjectArchive(p, to) {
+    const unpub = new Set(state.settings.unpublishedIds || []);
+    const list = [...p.entries].sort((a, b) =>
+      a.date.localeCompare(b.date) || String(a.createdAt).localeCompare(String(b.createdAt)));
+    const title = projectTitle(p);
+    const ago = humanAgo(p.lastUpdated);
+    const meta = `${p.entries.length}개` +
+      (p.transcriptionCount ? ` · 필사 ${p.transcriptionCount}` : "") +
+      (p.reflectionCount ? ` · 사유 ${p.reflectionCount}` : "") +
+      (ago ? ` · ${ago} 업데이트됨` : "");
+    let html = `<div class="art-frontis">
+      <div class="ft-mark">${esc(title)}</div>
+      <div class="ft-en">${esc(meta)}</div>
+      ${state.settings.curatorNote ? `<div class="ft-curator">${esc(state.settings.curatorNote)}</div>` : ""}
+      <div class="ft-rule"></div>
+    </div>`;
+    if (!list.length) { html += `<div class="art-empty">— 아직 비어 있습니다 —</div>`; to.innerHTML = html; return; }
+    list.forEach((e, idx) => {
+      const isUn = unpub.has(e.id);
+      const num = list.length <= 600 ? toRoman(idx + 1) : String(idx + 1);
+      let body, interp = "", corr = "", threads = "";
+      if (e.kind === "reflection") {
+        const r = e.reflection || { body: "", revisions: [] };
+        const text = (r.body || "").trim();
+        body = text ? esc(text).replace(/\n/g, "<br/>") : "";
+        // (in art mode we don't surface Claude's corrections — only the writer's own text)
+      } else {
+        body = buildArtBody(e);
+        if (e.interpretation && e.interpretation.trim()) interp = `<div class="art-interp">${esc(e.interpretation)}</div>`;
+        corr = (e.corrections || []).map((c) =>
+          `<div class="art-correction"><span class="ts">${esc(fmtDate(c.timestamp))}</span><del>${esc(c.previousText) || "&nbsp;"}</del></div>`).join("");
+        threads = (e.threads || []).filter((t) => t.anchorText && t.messages.some((m) => m.role === "assistant")).map((t) => {
+          const a = t.messages.find((m) => m.role === "assistant" && !m.pending);
+          return `<div class="art-thread"><span class="tri">△</span> <span class="q">${esc(t.anchorText)}</span>${a ? ` — <span class="a">${esc(a.content)}</span>` : ""}</div>`;
+        }).join("");
+      }
+      const foot = `<div class="art-foot"><span class="fn-mark">—— </span>${esc([e.source.author, e.source.title].filter(Boolean).join(", "))}${e.source.page ? ", " + esc(pageRef(e.source.page)) : ""}${e.source.author || e.source.title ? ". " : ""}${esc(fmtDate(e.date))}${e.kind === "reflection" ? " · 사유" : ""}</div>`;
+      html += `<section class="art-entry${isUn ? " is-unpublished" : ""}" data-art="${escAttr(e.id)}">
+        <button class="art-pub-toggle" data-pub="${escAttr(e.id)}">${isUn ? "숨김 — 보이기" : "숨기기"}</button>
+        <div class="art-entry-num">${esc(num)}${isUn ? " · 숨김" : ""}</div>
+        <div class="art-text">${body || "<i style='opacity:.5'>(빈 본문)</i>"}</div>
+        ${interp}
+        ${corr ? `<div class="art-threads" style="margin-top:14px;">${corr}</div>` : ""}
+        ${threads ? `<div class="art-threads">${threads}</div>` : ""}
+        ${foot}
+      </section>`;
+    });
+    to.innerHTML = html;
+  }
+
+  function openNewProjectModal() {
+    const wrap = document.createElement("div");
+    wrap.className = "new-project-form";
+    wrap.innerHTML = `
+      <div class="new-project-fields">
+        <span class="new-project-label">저자</span>
+        <input class="new-project-input" id="npAuthor" placeholder="예: 톨스토이" autocomplete="off" />
+        <span class="new-project-label" style="margin-top:4px;">작품 · 주제</span>
+        <input class="new-project-input" id="npTitle" placeholder="예: 예술이란 무엇인가" autocomplete="off" />
+      </div>
+      <div class="new-project-label" style="margin-top:6px;">첫 문서</div>
+      <div class="new-project-pickers">
+        <button type="button" class="doc-picker-card" data-kind="transcription">
+          <span class="doc-picker-name">필사</span>
+          <span class="doc-picker-desc">남의 글을 옮겨 적고 해석합니다.</span>
+        </button>
+        <button type="button" class="doc-picker-card" data-kind="reflection">
+          <span class="doc-picker-name">사유</span>
+          <span class="doc-picker-desc">내 생각을 직접 적고 다듬습니다.</span>
+        </button>
+      </div>`;
+    wrap.addEventListener("click", (ev) => {
+      const card = ev.target.closest(".doc-picker-card");
+      if (!card) return;
+      const author = (wrap.querySelector("#npAuthor").value || "").trim();
+      const title = (wrap.querySelector("#npTitle").value || "").trim();
+      if (!author && !title) {
+        const a = wrap.querySelector("#npAuthor"); a.focus();
+        a.style.borderColor = "var(--color-text-warning)";
+        setTimeout(() => { a.style.borderColor = ""; }, 1200);
+        return;
+      }
+      closeModal();
+      newEntry(card.dataset.kind, { author, title });
+    });
+    openModal("새 프로젝트", wrap);
+    setTimeout(() => { try { wrap.querySelector("#npAuthor").focus(); } catch (_) {} }, 0);
+  }
+
+  /* ─────────────────────── 나의 생각 (사유 archive) ─────────────────────── */
+  let thoughtsState = { filter: "" };
+  function reflectionEntriesSorted() {
+    return state.entries
+      .filter((e) => e.kind === "reflection")
+      .sort((a, b) => b.date.localeCompare(a.date) || String(b.createdAt).localeCompare(String(a.createdAt)));
+  }
+  function renderThoughtsView() {
+    const list = reflectionEntriesSorted();
+    D.thoughtsSub.textContent = `${list.length}개의 사유 · 내가 적고 Claude가 다듬은 것들`;
+    D.thoughtsFilter.value = thoughtsState.filter;
+    const f = thoughtsState.filter.trim().toLowerCase();
+    const filtered = !f ? list : list.filter((e) => {
+      const r = e.reflection || {};
+      const hay = [
+        r.body || "",
+        srcLabel(e) || "",
+        ...(Array.isArray(r.revisions) ? r.revisions.flatMap((rv) => [rv.corrected || "", (rv.errors || []).map((er) => er.detail).join(" ")]) : []),
+      ].join("\n").toLowerCase();
+      return hay.includes(f);
+    });
+    if (!filtered.length) {
+      D.thoughtList.innerHTML = `<div class="thought-row-empty">${list.length ? "거른 결과가 없습니다." : "아직 사유가 없습니다. 사이드바 “새 문서” → 사유로 시작합니다."}</div>`;
+      return;
+    }
+    D.thoughtList.innerHTML = filtered.map((e) => {
+      const r = e.reflection || { body: "", revisions: [] };
+      const last = r.revisions && r.revisions.length ? r.revisions[r.revisions.length - 1] : null;
+      const body = (r.body || "").trim();
+      const src = srcLabel(e);
+      const tagCounts = {};
+      if (last && Array.isArray(last.errors)) for (const er of last.errors) tagCounts[er.tag] = (tagCounts[er.tag] || 0) + 1;
+      const tagPills = Object.entries(tagCounts)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 4)
+        .map(([t, n]) => `<span class="reflect-err-tag">${esc(t)}·${n}</span>`).join(" ");
+      const rev = r.revisions ? r.revisions.length : 0;
+      return `<button type="button" class="thought-row" data-open-entry="${escAttr(e.id)}">
+        <div class="thought-row-top">
+          <div class="thought-row-date">${esc(fmtDate(e.date))}</div>
+          <div class="thought-row-src">${esc(src || "—")}</div>
+        </div>
+        <div class="thought-row-body">${esc(body) || "<i style='opacity:.5'>(빈 본문)</i>"}</div>
+        <div class="thought-row-tags">
+          <span class="thought-row-revcount">${rev ? `교정 ${rev}회` : "아직 안 보냄"}</span>
+          ${tagPills}
+        </div>
+      </button>`;
+    }).join("");
+  }
+
   /* ─────────────────────── SEARCH ─────────────────────── */
   let searchState = { q: "", colors: new Set(), claude: false, from: "", to: "", author: "", cursor: 0, results: [] };
   function openSearch() {
@@ -1128,6 +1620,7 @@
     searchState.from = D.chipFrom.value; searchState.to = D.chipTo.value; searchState.author = D.chipAuthor.value.trim();
     const ql = q.toLowerCase();
     let res = state.entries.filter((e) => {
+      if (e.kind === "reflection") return false; // 사유는 별도 아카이브에서 (step 7)
       if (searchState.from && e.date < searchState.from) return false;
       if (searchState.to && e.date > searchState.to) return false;
       if (searchState.author && !e.source.author.toLowerCase().includes(searchState.author.toLowerCase())) return false;
@@ -1175,42 +1668,7 @@
     if (e) { closeSearch(); openEntry(e.id); }
   }
 
-  /* ─────────────────────── ART MODE (Cha-style) ─────────────────────── */
-  function renderArtView() {
-    const list = entriesChrono();
-    const to = D.artScroll;
-    const unpub = new Set(state.settings.unpublishedIds || []);
-    const epigraph = `필사 — 한 사람이 두 언어 사이를 건너며 남긴 자취.\nthe transcribed body, kept as evidence.`;
-    let html = `<div class="art-frontis">
-      <div class="ft-mark">필사</div>
-      <div class="ft-en">${esc(epigraph)}</div>
-      ${state.settings.curatorNote ? `<div class="ft-curator">${esc(state.settings.curatorNote)}</div>` : ""}
-      <div class="ft-rule"></div>
-    </div>`;
-    if (!list.length) { html += `<div class="art-empty">— 아직 비어 있습니다 —</div>`; to.innerHTML = html; return; }
-    list.forEach((e, idx) => {
-      const isUn = unpub.has(e.id);
-      const num = list.length <= 600 ? toRoman(idx + 1) : String(idx + 1);
-      const bodyHtml = buildArtBody(e);
-      const corr = (e.corrections || []).map((c) =>
-        `<div class="art-correction"><span class="ts">${esc(fmtDate(c.timestamp))}</span><del>${esc(c.previousText) || "&nbsp;"}</del></div>`).join("");
-      const threads = (e.threads || []).filter((t) => t.anchorText && t.messages.some((m) => m.role === "assistant")).map((t) => {
-        const a = t.messages.find((m) => m.role === "assistant" && !m.pending);
-        return `<div class="art-thread"><span class="tri">△</span> <span class="q">${esc(t.anchorText)}</span>${a ? ` — <span class="a">${esc(a.content)}</span>` : ""}</div>`;
-      }).join("");
-      const foot = `<div class="art-foot"><span class="fn-mark">—— </span>${esc([e.source.author, e.source.title].filter(Boolean).join(", "))}${e.source.page ? ", " + esc(pageRef(e.source.page)) : ""}${e.source.author || e.source.title ? ". " : ""}${esc(fmtDate(e.date))}</div>`;
-      html += `<section class="art-entry${isUn ? " is-unpublished" : ""}" data-art="${escAttr(e.id)}">
-        <button class="art-pub-toggle" data-pub="${escAttr(e.id)}">${isUn ? "숨김 — 보이기" : "숨기기"}</button>
-        <div class="art-entry-num">${esc(num)}${isUn ? " · 숨김" : ""}</div>
-        <div class="art-text">${bodyHtml || "<i style='opacity:.5'>(빈 본문)</i>"}</div>
-        ${e.interpretation.trim() ? `<div class="art-interp">${esc(e.interpretation)}</div>` : ""}
-        ${corr ? `<div class="art-threads" style="margin-top:14px;">${corr}</div>` : ""}
-        ${threads ? `<div class="art-threads">${threads}</div>` : ""}
-        ${foot}
-      </section>`;
-    });
-    to.innerHTML = html;
-  }
+  /* ─────────────────────── ART MODE helpers (used by project archive) ─────────────────────── */
   function buildArtBody(e) {
     // same interleave as read-mode, marks render as thin underlines in art CSS
     return buildBodyHtml(e);
@@ -1221,7 +1679,12 @@
     ta.placeholder = "공개 아카이브 앞에 둘 글 — 이 작업이 무엇인지, 왜 두 언어 사이에 있는지.";
     openModal("큐레이터 노트", ta, [
       { label: "취소" },
-      { label: "저장", primary: true, onClick: () => { state.settings.curatorNote = ta.value; touchAppState(); renderArtView(); } },
+      { label: "저장", primary: true, onClick: () => {
+          state.settings.curatorNote = ta.value; touchAppState();
+          const { name, arg } = parseHash();
+          if (name === "projects" && arg && arg.length) renderProjectDetailView(arg[0]);
+        }
+      },
     ]);
     setTimeout(() => ta.focus(), 0);
   }
@@ -1344,7 +1807,8 @@
     D.searchBtn.addEventListener("click", openSearch);
     D.wordsBtn.addEventListener("click", () => go("#words"));
     D.sentencesBtn.addEventListener("click", () => go("#sentences"));
-    D.artBtn.addEventListener("click", () => go("#art"));
+    D.thoughtsBtn.addEventListener("click", () => go("#thoughts"));
+    D.projectsBtn.addEventListener("click", () => go("#projects"));
     D.exportBtn.addEventListener("click", exportJSON);
     D.importBtn.addEventListener("click", () => D.importInput.click());
     D.importInput.addEventListener("change", () => { importJSON(D.importInput.files && D.importInput.files[0]); D.importInput.value = ""; });
@@ -1363,6 +1827,35 @@
     D.srcAuthor.addEventListener("input", () => onSrc("author", D.srcAuthor));
     D.srcTitle.addEventListener("input", () => onSrc("title", D.srcTitle));
     D.srcPage.addEventListener("input", () => onSrc("page", D.srcPage));
+
+    // reflection (사유) entry — header + body + mode + send
+    D.reflectDeleteBtn.addEventListener("click", deleteCurrentEntry);
+    D.reflectDate.addEventListener("change", () => {
+      const e = currentEntry(); if (!e) return;
+      const v = D.reflectDate.value; if (!v) { D.reflectDate.value = e.date; return; }
+      e.date = v; D.reflectWeekday.textContent = weekdayOf(v) ? "· " + weekdayOf(v) : "";
+      touchEntry(e); renderRecentList();
+    });
+    D.reflectAuthor.addEventListener("input", () => { const e = currentEntry(); if (!e) return; e.source.author = D.reflectAuthor.value; touchEntry(e); renderRecentList(); });
+    D.reflectTitle.addEventListener("input", () => { const e = currentEntry(); if (!e) return; e.source.title = D.reflectTitle.value; touchEntry(e); renderRecentList(); });
+    D.reflectBody.addEventListener("input", () => {
+      const e = currentEntry(); if (!e || e.kind !== "reflection") return;
+      if (!e.reflection) e.reflection = { mode: "correct", body: "", revisions: [] };
+      e.reflection.body = D.reflectBody.value; touchEntry(e);
+    });
+    D.reflectBody.addEventListener("keydown", (ev) => {
+      if ((ev.metaKey || ev.ctrlKey) && ev.key === "Enter") { ev.preventDefault(); sendReflection(); }
+    });
+    D.reflectSend.addEventListener("click", () => sendReflection());
+    D.reflectModes.addEventListener("click", (ev) => {
+      const b = ev.target.closest(".reflect-mode"); if (!b || b.disabled) return;
+      const e = currentEntry(); if (!e || e.kind !== "reflection") return;
+      if (!e.reflection) e.reflection = { mode: "correct", body: "", revisions: [] };
+      e.reflection.mode = b.dataset.mode || "correct";
+      touchEntry(e);
+      D.reflectModes.querySelectorAll(".reflect-mode").forEach((x) => x.classList.toggle("is-on", x === b));
+      D.reflectModeDesc.textContent = modeDesc(e.reflection.mode);
+    });
 
     // body: read mode
     D.bodyRender.addEventListener("click", (ev) => {
@@ -1440,15 +1933,35 @@
 
     // sentences view
     D.sentencesFilter.addEventListener("input", () => { sentencesState.filter = D.sentencesFilter.value; renderSentencesView(); });
+    D.thoughtsFilter.addEventListener("input", () => { thoughtsState.filter = D.thoughtsFilter.value; renderThoughtsView(); });
+    D.thoughtList.addEventListener("click", (ev) => {
+      const row = ev.target.closest("[data-open-entry]");
+      if (row) { go("#daily"); openEntry(row.dataset.openEntry); }
+    });
+
+    // projects — grid
+    D.projectsFilter.addEventListener("input", () => { projectsState.filter = D.projectsFilter.value; renderProjectsView(); });
+    D.projectsSort.addEventListener("change", () => { projectsState.sort = D.projectsSort.value; renderProjectsView(); });
+    D.projectsKindFilter.addEventListener("click", (ev) => {
+      const b = ev.target.closest("button[data-kind]"); if (!b) return;
+      projectsState.kind = b.dataset.kind;
+      renderProjectsView();
+    });
+    D.projectsNewBtn.addEventListener("click", openNewProjectModal);
+    D.projectsGrid.addEventListener("click", (ev) => {
+      const card = ev.target.closest(".project-card");
+      if (card) go("#projects/" + card.dataset.project);
+    });
+    // projects — detail
+    D.projectBackBtn.addEventListener("click", () => go("#projects"));
     D.sentenceList.addEventListener("click", (ev) => {
       const openEntryBtn = ev.target.closest("[data-open-entry]"); if (openEntryBtn) { go("#daily"); openEntry(openEntryBtn.dataset.openEntry); return; }
       const row = ev.target.closest(".sentence-row"); if (row) { sentencesState.open = sentencesState.open === row.dataset.sentence ? null : row.dataset.sentence; renderSentencesView(); }
     });
 
-    // art view
-    D.artExitBtn.addEventListener("click", () => go("#daily"));
-    D.artCuratorEditBtn.addEventListener("click", editCuratorNote);
-    D.artScroll.addEventListener("click", (ev) => {
+    // project detail (art-style archive of one project)
+    D.projectCuratorEditBtn.addEventListener("click", editCuratorNote);
+    D.projectArtScroll.addEventListener("click", (ev) => {
       const pub = ev.target.closest("[data-pub]");
       if (pub) {
         ev.stopPropagation();
@@ -1456,11 +1969,16 @@
         const set = new Set(state.settings.unpublishedIds || []);
         if (set.has(id)) set.delete(id); else set.add(id);
         state.settings.unpublishedIds = [...set];
-        touchAppState(); renderArtView();
+        touchAppState();
+        const { arg } = parseHash();
+        if (arg && arg.length) renderProjectDetailView(arg[0]);
         return;
       }
       const anchor = ev.target.closest(".thread-anchor");
-      if (anchor) { /* in art mode, jumping opens the entry */ const sec = anchor.closest(".art-entry"); if (sec) { go("#daily"); openEntry(sec.dataset.art); openClaudePanel(true); } }
+      if (anchor) {
+        const sec = anchor.closest(".art-entry");
+        if (sec) { go("#daily"); openEntry(sec.dataset.art); openClaudePanel(true); }
+      }
     });
 
     // search modal
