@@ -14,12 +14,12 @@ proxy live on **Supabase** (project `Dohhani_Thinker`, ref `ooqzmtgbhctsrghjnrda
 - **Daily mode** — sidebar (`+ 새 필사 · 검색 · 나의 단어 · 나의 문장 · 프로젝트·아카이브 · 최근`) + entry view (date · author/title/page · English body · Korean interpretation).
 - **Highlighting** — click the body to edit, drag-select, then 🟡 단어 / 🔵 구절 / △ 묻기. Yellow words feed the personal dictionary; offsets re-anchor as you edit.
 - **나의 단어 (dictionary)** — every yellow-marked word, its definitions (you add them), every encounter in order with the surrounding sentence + source, and what Claude said about it. When a word reappears in another entry it gets a dotted underline + a hover tooltip ("처음 만난 곳…").
-- **Claude** — select a sentence → "△ 묻기" creates a △ anchor in the text and a thread; or ask a general question in the panel at the bottom. Concise, Korean-by-default literary tutoring (word meaning · grammar · style · checking your translation). Calls go through a Supabase Edge Function — the API key never reaches the browser.
+- **Claude** — three ways in: (a) write your Korean rendering / questions in the **interpretation field** and press **△ Claude에게 보내기** (`⌘↵`) — Claude answers in the panel *and* files the words/phrases you were unsure about into 나의 단어 / 나의 문장 automatically (a 🟡 mark + △ anchors appear in the body); (b) select a sentence → "△ 묻기" creates a △ anchor + a thread; (c) ask a general question in the panel at the bottom. Concise, Korean-by-default literary tutoring (word meaning · grammar · style · checking your translation). Calls go through a Supabase Edge Function — the API key never reaches the browser.
 - **나의 문장** — every anchored Claude thread, as a browsable archive: click a sentence to see your interpretation + Claude's feedback (meaning / grammar / a better rendering). Exactly the "my words / my sentences" split.
 - **Search** — `⌘K`. Full-text over body · interpretation · source · Claude messages, with filter chips (highlight colour, has-Claude, date range, author).
 - **프로젝트 · 아카이브 (Art mode)** — Cha-style (black/white, sparse, thin serif, Latin-footnote source citations). Chronological fragments, numbered; corrections shown as struck-through palimpsests (errors preserved); per-entry publish/hide toggle; a curator's note.
 - **Errors preserved** — editing a saved interpretation pushes the prior version into the entry's `corrections`; visible in Art mode and via "n번 고쳐 씀 — 이전 해석 보기".
-- **Keyboard** — `⌘N` new · `⌘K` search · `⌘S` force-sync · `⌘1`/`⌘2` yellow/blue on a selection (in edit mode) · `Esc` closes things.
+- **Keyboard** — `⌘N` new · `⌘K` search · `⌘S` force-sync · `⌘1`/`⌘2` yellow/blue on a selection (in edit mode) · `⌘↵` in the interpretation field sends it to Claude · `Esc` closes things.
 - Cross-device sync (local-first cache → Supabase), light + dark, JSON export/import, responsive sidebar collapse.
 
 ## One-time Supabase setup (do this once, then it just works)
@@ -64,7 +64,7 @@ Redirect URLs) if you kept email confirmation on; otherwise nothing else to do.
 |---|---|
 | `index.html` · `styles.css` · `app.js` | the whole front-end |
 | `supabase/migrations/0001_init.sql` | `entries` + `app_state` tables, RLS, `updated_at` trigger (already applied) |
-| `supabase/functions/claude/index.ts` | the Anthropic proxy Edge Function (already deployed) |
+| `supabase/functions/claude/index.ts` | the Anthropic proxy Edge Function — redeploy after changing it: `supabase functions deploy claude --project-ref ooqzmtgbhctsrghjnrda` |
 
 ### Data model (in `entries.data` jsonb, one row per entry)
 
@@ -72,7 +72,7 @@ Redirect URLs) if you kept email confirmation on; otherwise nothing else to do.
 Entry  { id, date, source:{author,title,page}, body, interpretation,
          highlights:[{id,startChar,endChar,type:'yellow'|'blue',note}],
          corrections:[{timestamp,previousText,newText}],
-         threads:[{id,anchorChar,anchorText,createdAt,messages:[{id,role,content,timestamp}]}] }
+         threads:[{id,anchorChar,anchorText,fromInterp,createdAt,messages:[{id,role,content,timestamp}]}] }
 ```
 `app_state.terms` = `[{id,word,definitions:[…],encounters:[{entryId,date,context,note,charStart,charEnd}]}]`,
 `app_state.settings` = `{artAesthetic:'cha', curatorNote, unpublishedIds:[…]}`.

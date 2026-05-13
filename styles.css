@@ -300,10 +300,22 @@ a { color: inherit; }
 .interp-input::placeholder { color: var(--color-text-tertiary); }
 .interp-input:focus { outline: none; }
 .interp-revisions {
-  margin-top: 6px; font-size: 11px; color: var(--color-text-tertiary);
+  font-size: 11px; color: var(--color-text-tertiary);
   text-decoration: underline; text-underline-offset: 2px; text-decoration-style: dotted;
 }
 .interp-revisions:hover { color: var(--color-text-secondary); }
+.interp-foot { display: flex; align-items: center; gap: 14px; margin-top: 9px; flex-wrap: wrap; }
+.interp-send {
+  display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px;
+  color: var(--color-text-tertiary); border: 0.5px solid var(--color-border-secondary);
+  border-radius: 6px; padding: 4px 9px;
+  transition: color 0.15s, border-color 0.15s, background-color 0.15s;
+}
+.interp-send:hover { color: var(--color-text-secondary); border-color: var(--color-text-tertiary); background: var(--color-background-secondary); }
+.interp-send:disabled { opacity: 0.5; cursor: default; }
+.interp-send:disabled:hover { background: transparent; color: var(--color-text-tertiary); border-color: var(--color-border-secondary); }
+.interp-send .tri { font-size: 9px; }
+.interp-send kbd { font-family: var(--font-mono); font-size: 10px; color: var(--color-text-tertiary); border: 0.5px solid var(--color-border-tertiary); border-radius: 3px; padding: 0 3px; }
 
 /* ── Claude panel ── */
 .claude-panel { margin-top: 36px; border-top: 0.5px solid var(--color-border-tertiary); }

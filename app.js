@@ -89,6 +89,21 @@
     for (const bp of breaks) { if (bp <= a) start = bp; else { end = bp; break; } }
     return { text: text.slice(start, end).trim(), start, end };
   }
+  // locate an English word inside `body` (word-boundary, case-insensitive); falls back to a prefix match
+  function findWordSpan(body, word) {
+    const core = String(word == null ? "" : word).match(/[A-Za-z][A-Za-z'’-]*/);
+    if (!body || !core) return null;
+    const rx = core[0].replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    let m = new RegExp("\\b" + rx + "\\b", "i").exec(body);
+    if (!m) m = new RegExp("\\b" + rx + "[A-Za-z'’-]*", "i").exec(body);
+    return m ? { start: m.index, end: m.index + m[0].length } : null;
+  }
+  function sentenceContaining(body, needle) {
+    if (!body || !needle) return "";
+    const i = String(body).toLowerCase().indexOf(String(needle).toLowerCase());
+    if (i < 0) return "";
+    return sentenceAround(String(body), i, i + String(needle).length).text;
+  }
 
   /* ─────────────────────── STATE ─────────────────────── */
   let user = null; // { id, email }
@@ -138,6 +153,7 @@
       id: t.id || uid(),
       anchorChar: Number.isFinite(t.anchorChar) ? t.anchorChar | 0 : null,
       anchorText: t.anchorText || "",
+      fromInterp: !!t.fromInterp,
       createdAt: t.createdAt || nowISO(), updatedAt: t.updatedAt || nowISO(),
       messages: Array.isArray(t.messages) ? t.messages
         .filter((m) => m && m.content != null && (m.role !== "assistant" || String(m.content).trim() !== ""))
@@ -344,7 +360,7 @@
       "app","sidebar","sidebarToggle","wordmark","syncDot","newEntryBtn","searchBtn","wordsBtn","sentencesBtn","artBtn",
       "wordsCount","sentencesCount","recentList","exportBtn","importBtn","signOutBtn","importInput","sidebarReopen","main",
       "emptyState","emptyNewBtn","entryView","entryDate","entryWeekday","entryStatus","deleteEntryBtn","srcAuthor","srcTitle","srcPage",
-      "bodyField","bodyRender","bodyEditWrap","bodyBackdrop","bodyInput","hlToolbar","bodyHint","interpInput","interpRevisions",
+      "bodyField","bodyRender","bodyEditWrap","bodyBackdrop","bodyInput","hlToolbar","bodyHint","interpInput","interpSend","interpRevisions",
       "claudePanel","claudeHead","claudeTitle","claudeChevron","claudeBody","threadList","claudeCompose","claudeInput","claudeSend","claudeWarn",
       "wordsView","wordsSub","wordsFilter","wordsSort","wordsGrid","sentencesView","sentencesSub","sentencesFilter","sentenceList",
       "artView","artToolbar","artCuratorEditBtn","artExitBtn","artScroll",
@@ -469,6 +485,8 @@
     D.bodyEditWrap.hidden = true; D.bodyRender.hidden = false;
     renderBodyRead();
     D.interpInput.value = e.interpretation; interpSnapshot = e.interpretation; autoGrow(D.interpInput);
+    D.interpSend.disabled = false;
+    { const isl = D.interpSend.querySelector(".interp-send-label"); if (isl) isl.textContent = "Claude에게 보내기"; }
     renderInterpRevisions();
     hideToolbar(); hideWordTip();
     // claude panel
@@ -803,7 +821,7 @@
     D.threadList.innerHTML = ths.map((t) => {
       const head = t.anchorText
         ? `<div class="thread-anchor-quote" data-jump="${escAttr(t.id)}"><span class="tri">△</span><span class="q">${esc(t.anchorText)}</span><button class="thread-del" data-del="${escAttr(t.id)}">삭제</button></div>`
-        : `<div class="thread-anchor-quote" data-jump="${escAttr(t.id)}"><span class="q" style="font-family:var(--font-sans);font-style:normal;color:var(--color-text-tertiary);">이 필사에 대한 일반 질문</span><button class="thread-del" data-del="${escAttr(t.id)}">삭제</button></div>`;
+        : `<div class="thread-anchor-quote" data-jump="${escAttr(t.id)}"><span class="q" style="font-family:var(--font-sans);font-style:normal;color:var(--color-text-tertiary);">${t.fromInterp ? "나의 해석·질문에 대한 Claude" : "이 필사에 대한 일반 질문"}</span><button class="thread-del" data-del="${escAttr(t.id)}">삭제</button></div>`;
       const msgs = t.messages.map((m) => {
         if (m.role === "user") return `<div class="msg role-user"><span class="msg-who">나</span><div class="msg-content">${esc(m.content)}</div></div>`;
         if (m.pending) return `<div class="msg role-assistant pending"><span class="msg-who">Claude</span><div class="msg-content">…생각 중</div></div>`;
@@ -833,7 +851,9 @@
     renderThreads(); renderBodyRead();
   }
   function showClaudeWarn(msg) { D.claudeWarn.textContent = msg; D.claudeWarn.hidden = false; }
+  let claudeBusy = false;
   async function sendCompose() {
+    if (claudeBusy) return;
     const e = currentEntry(); if (!e) return;
     const text = D.claudeInput.value.trim();
     if (!text) return;
@@ -843,8 +863,58 @@
     D.claudeWarn.hidden = true;
     await runClaude(th, text);
   }
-  async function runClaude(th, userText) {
+  // file the words/phrases Claude flagged into 나의 단어 / 나의 문장
+  function applyPicks(e, picks) {
+    if (!e || !Array.isArray(picks) || !picks.length) return null;
+    let words = 0, phrases = 0;
+    for (const p of picks) {
+      if (!p || typeof p !== "object") continue;
+      const note = typeof p.note === "string" ? p.note.trim() : "";
+      const raw = typeof p.text === "string" ? p.text.trim() : "";
+      if (!raw) continue;
+      if (p.kind === "word") {
+        const span = findWordSpan(e.body, raw);
+        let termWord, ctx;
+        if (span) {
+          termWord = normWord(e.body.slice(span.start, span.end));
+          ctx = sentenceAround(e.body, span.start, span.end).text;
+          if (termWord && termWord.length >= 2 && !e.highlights.some((h) => h.startChar < span.end && h.endChar > span.start)) {
+            e.highlights.push({ id: uid(), startChar: span.start, endChar: span.end, type: "yellow", note: "" });
+          }
+        } else { termWord = normWord(raw); ctx = sentenceContaining(e.body, raw); }
+        if (termWord && termWord.length >= 2) {
+          let term = findTerm(termWord);
+          if (!term) { term = { id: uid(), word: termWord, definitions: [], encounters: [] }; state.terms.push(term); }
+          let enc = term.encounters.find((x) => x.entryId === e.id && (!span || Math.abs(x.charStart - span.start) < 2));
+          if (!enc) { enc = { entryId: e.id, date: e.date, context: ctx, note: "", charStart: span ? span.start : 0, charEnd: span ? span.end : 0 }; term.encounters.push(enc); }
+          else { if (ctx) enc.context = ctx; enc.date = e.date; if (span) { enc.charStart = span.start; enc.charEnd = span.end; } }
+          if (note && !term.definitions.some((d) => String(d).trim() === note)) term.definitions.push(note);
+          words++;
+        }
+      } else {
+        const lc = raw.toLowerCase();
+        let th = e.threads.find((t) => t.anchorText && t.anchorText.trim().toLowerCase() === lc);
+        if (!th) {
+          const i = e.body.toLowerCase().indexOf(lc);
+          th = { id: uid(), anchorChar: i >= 0 ? i : null, anchorText: i >= 0 ? e.body.slice(i, i + raw.length) : raw, fromInterp: true, createdAt: nowISO(), updatedAt: nowISO(), messages: [] };
+          e.threads.push(th);
+        }
+        if (note && !th.messages.some((m) => m.role === "assistant" && String(m.content).trim() === note)) {
+          th.messages.push({ id: uid(), role: "assistant", content: note, timestamp: nowISO() });
+        }
+        th.updatedAt = nowISO();
+        phrases++;
+      }
+    }
+    rebuildTermIndex();
+    touchEntry(e); touchAppState();
+    return { words, phrases };
+  }
+  async function runClaude(th, userText, opts) {
+    opts = opts || {};
     const e = currentEntry(); if (!e) return;
+    if (claudeBusy) return;
+    claudeBusy = true;
     th.messages.push({ id: uid(), role: "user", content: userText, timestamp: nowISO() });
     const pending = { id: uid(), role: "assistant", content: "", pending: true, timestamp: nowISO() };
     th.messages.push(pending);
@@ -854,6 +924,7 @@
     renderThreads();
     setComposeAnchor(th.anchorText ? th : null);
     D.claudeSend.disabled = true;
+    let added = null;
     try {
       const { data: sess } = await sb.auth.getSession();
       const tok = sess && sess.session ? sess.session.access_token : null;
@@ -863,22 +934,51 @@
       const resp = await fetch(CLAUDE_FN, {
         method: "POST",
         headers: { "Content-Type": "application/json", apikey: SUPABASE_KEY, Authorization: `Bearer ${tok}` },
-        body: JSON.stringify({ messages: turns, context }),
+        body: JSON.stringify({ messages: turns, context, extract: !!opts.extract }),
       });
       const out = await resp.json().catch(() => ({}));
       if (!resp.ok || out.error) throw new Error((out && out.error) ? out.error : `요청 실패 (${resp.status})`);
       pending.pending = false; pending.content = out.text || "(빈 응답)";
       delete pending.pending;
+      if (opts.extract && Array.isArray(out.picks) && out.picks.length) added = applyPicks(e, out.picks);
     } catch (err) {
       th.messages = th.messages.filter((m) => m.id !== pending.id);
       showClaudeWarn("Claude 호출 실패 — " + (err.message || String(err)));
     }
     D.claudeSend.disabled = false;
+    claudeBusy = false;
     th.updatedAt = nowISO();
     touchEntry(e);
+    if (opts.extract && !editing) renderBodyRead();
     renderThreads();
+    renderSidebarCounts();
+    if (added && (added.words || added.phrases)) {
+      const parts = [];
+      if (added.words) parts.push(`단어 ${added.words}개`);
+      if (added.phrases) parts.push(`문장 ${added.phrases}개`);
+      toast(`Claude가 ${parts.join(" · ")}를 나의 노트에 더했습니다`);
+    }
     const el = D.threadList.querySelector(`.thread[data-thread="${cssEsc(th.id)}"]`);
     if (el) el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+  async function sendInterpToClaude() {
+    if (claudeBusy) return;
+    const e = currentEntry(); if (!e) return;
+    e.interpretation = D.interpInput.value;
+    const text = e.interpretation.trim();
+    if (!text) { D.interpInput.focus(); flashStatus("먼저 해석이나 질문을 적어 주세요"); return; }
+    let th = e.threads.find((t) => t.fromInterp && !t.anchorText);
+    if (!th) { th = { id: uid(), anchorChar: null, anchorText: "", fromInterp: true, createdAt: nowISO(), updatedAt: nowISO(), messages: [] }; e.threads.push(th); }
+    const lastUser = [...th.messages].reverse().find((m) => !m.pending && m.role === "user");
+    if (lastUser && lastUser.content.trim() === text) { flashStatus("바뀐 내용이 없습니다 — 해석을 고친 뒤 다시 보내세요"); return; }
+    activeThreadId = th.id;
+    openClaudePanel(true);
+    const label = D.interpSend.querySelector(".interp-send-label");
+    D.interpSend.disabled = true;
+    if (label) label.textContent = "보내는 중…";
+    try { await runClaude(th, text, { extract: true }); }
+    finally { D.interpSend.disabled = false; if (label) label.textContent = "Claude에게 보내기"; }
+    D.claudePanel.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }
 
   /* ─────────────────────── RECENT LIST + COUNTS ─────────────────────── */
@@ -1306,6 +1406,8 @@
     D.interpInput.addEventListener("focus", () => { const e = currentEntry(); interpSnapshot = e ? e.interpretation : D.interpInput.value; });
     D.interpInput.addEventListener("input", () => { const e = currentEntry(); if (!e) return; e.interpretation = D.interpInput.value; autoGrow(D.interpInput); touchEntry(e); });
     D.interpInput.addEventListener("blur", captureInterpCorrection);
+    D.interpInput.addEventListener("keydown", (ev) => { if ((ev.metaKey || ev.ctrlKey) && ev.key === "Enter") { ev.preventDefault(); sendInterpToClaude(); } });
+    D.interpSend.addEventListener("click", sendInterpToClaude);
     D.interpRevisions.addEventListener("click", showRevisionsModal);
 
     // claude panel

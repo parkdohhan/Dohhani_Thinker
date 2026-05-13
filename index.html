@@ -143,8 +143,13 @@
         <div class="interp-rail"></div>
         <div class="interp-wrap">
           <textarea class="text-input interp-input" id="interpInput"
-            placeholder="→ 한국어로 옮기거나, 읽으며 떠오른 것을 적습니다."></textarea>
-          <button class="interp-revisions" id="interpRevisions" hidden></button>
+            placeholder="→ 한국어로 옮기거나, 읽으며 떠오른 것을 적습니다. 헷갈리는 건 그대로 적어 두고 ⌘↵ 로 Claude에게 보내면, 답과 함께 단어·문장을 노트에 모아 둡니다."></textarea>
+          <div class="interp-foot">
+            <button class="interp-send" id="interpSend" type="button" title="해석·질문을 Claude에게 보내기 (⌘↵)">
+              <span class="tri">△</span><span class="interp-send-label">Claude에게 보내기</span><kbd>⌘↵</kbd>
+            </button>
+            <button class="interp-revisions" id="interpRevisions" hidden></button>
+          </div>
         </div>
       </section>
 
