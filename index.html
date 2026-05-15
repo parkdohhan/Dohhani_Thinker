@@ -142,7 +142,7 @@
             <ul class="slash-menu-list" id="slashMenuList"></ul>
           </div>
         </div>
-        <div class="body-hint" id="bodyHint">클릭해서 편집 · 드래그해서 표시 · <kbd>/</kbd>로 블록 추가</div>
+        <div class="body-hint" id="bodyHint">클릭해서 편집 · 드래그해서 표시</div>
       </section>
 
       <!-- INTERPRETATION -->
@@ -209,30 +209,12 @@
         <span class="reflect-mode-desc" id="reflectModeDesc">문법·표현 교정과 한국어 설명</span>
       </div>
 
-      <!-- body: my own writing -->
-      <section class="block block--reflect-body">
-        <textarea class="reflect-body" id="reflectBody" spellcheck="false"
-          placeholder="여기에 사유를 적습니다. 영어든 한국어든, 섞어 써도 좋습니다.&#10;⌘↵ 로 Claude에게 보내면, 같은 언어로 다듬은 교정본과 한국어로 된 지적이 아래에 옵니다."></textarea>
-        <div class="reflect-foot">
-          <button class="reflect-send" id="reflectSend" type="button" title="Claude에게 보내기 (⌘↵)">
-            <span class="tri">△</span><span class="reflect-send-label">Claude에게 보내기</span><kbd>⌘↵</kbd>
-          </button>
-          <span class="reflect-rev-count" id="reflectRevCount"></span>
-        </div>
-      </section>
-
-      <!-- response panel -->
-      <section class="reflect-response" id="reflectResponse" hidden>
-        <div class="reflect-resp-h">교정</div>
-        <div class="reflect-corrected" id="reflectCorrected"></div>
-
-        <div class="reflect-resp-h" id="reflectErrorsH" hidden>지적</div>
-        <ul class="reflect-errors" id="reflectErrors"></ul>
-
-        <div class="reflect-resp-foot">
-          <span class="reflect-resp-ts" id="reflectRespTs"></span>
-        </div>
-      </section>
+      <!-- chain of (user paragraph + AI answer) blocks -->
+      <div class="reflect-blocks" id="reflectBlocks"></div>
+      <button class="rb-add" id="reflectAddBlock" type="button" title="다음 문단 추가 (⌘↵로 보내고 자동 추가됨)">
+        + 다음 문단
+      </button>
+      <div class="reflect-rev-count" id="reflectRevCount" style="margin-top:8px;"></div>
     </article>
 
     <!-- 나의 단어 (dictionary) -->

@@ -128,7 +128,7 @@
       createdAt: t, updatedAt: t,
     };
     if (kind === "reflection") {
-      base.reflection = { mode: "correct", body: "", revisions: [] };
+      base.reflection = { mode: "correct", blocks: [{ id: uid(), kind: "user", text: "" }] };
     } else {
       base.body = ""; base.highlights = []; base.interpretation = "";
       base.corrections = []; base.threads = [];
@@ -151,6 +151,52 @@
       questions: Array.isArray(r.questions) ? r.questions.filter((x) => typeof x === "string") : [],
     };
   }
+  function normReflectBlock(b) {
+    b = b && typeof b === "object" ? b : {};
+    if (b.kind === "ai") {
+      return {
+        id: typeof b.id === "string" ? b.id : uid(), kind: "ai",
+        mode: b.mode === "expand" || b.mode === "deep" ? b.mode : "correct",
+        input: typeof b.input === "string" ? b.input : "",
+        corrected: typeof b.corrected === "string" ? b.corrected : "",
+        errors: Array.isArray(b.errors) ? b.errors
+          .filter((x) => x && typeof x === "object")
+          .map((x) => ({ tag: typeof x.tag === "string" ? x.tag : "grammar/other", detail: typeof x.detail === "string" ? x.detail : "" })) : [],
+        expressions: Array.isArray(b.expressions) ? b.expressions.filter((x) => typeof x === "string") : [],
+        summary: typeof b.summary === "string" ? b.summary : "",
+        questions: Array.isArray(b.questions) ? b.questions.filter((x) => typeof x === "string") : [],
+        timestamp: b.timestamp || nowISO(),
+      };
+    }
+    return { id: typeof b.id === "string" ? b.id : uid(), kind: "user", text: typeof b.text === "string" ? b.text : "" };
+  }
+  function normReflection(r) {
+    r = r && typeof r === "object" ? r : {};
+    const mode = r.mode === "expand" || r.mode === "deep" ? r.mode : "correct";
+    let blocks;
+    if (Array.isArray(r.blocks) && r.blocks.length) {
+      blocks = r.blocks.map(normReflectBlock);
+    } else {
+      // legacy: body + revisions → blocks
+      blocks = [];
+      for (const rev of (Array.isArray(r.revisions) ? r.revisions : [])) {
+        const nr = normRevision(rev);
+        blocks.push({ id: uid(), kind: "user", text: nr.input });
+        blocks.push({
+          id: uid(), kind: "ai", mode: nr.mode, input: nr.input,
+          corrected: nr.corrected, errors: nr.errors, expressions: nr.expressions,
+          summary: nr.summary, questions: nr.questions, timestamp: nr.timestamp,
+        });
+      }
+      const tail = typeof r.body === "string" ? r.body : "";
+      const lastIsUserMatching = blocks.length && blocks[blocks.length - 1].kind === "user" && blocks[blocks.length - 1].text === tail;
+      if (tail.trim() && !lastIsUserMatching) blocks.push({ id: uid(), kind: "user", text: tail });
+    }
+    if (!blocks.length) blocks.push({ id: uid(), kind: "user", text: "" });
+    // always end on a user block so there's somewhere to keep writing
+    if (blocks[blocks.length - 1].kind !== "user") blocks.push({ id: uid(), kind: "user", text: "" });
+    return { mode, blocks };
+  }
   function normEntry(e) {
     e = e && typeof e === "object" ? e : {};
     const s = e.source && typeof e.source === "object" ? e.source : {};
@@ -165,11 +211,7 @@
     };
     if (kind === "reflection") {
       const r = e.reflection && typeof e.reflection === "object" ? e.reflection : {};
-      out.reflection = {
-        mode: r.mode === "expand" || r.mode === "deep" ? r.mode : "correct",
-        body: typeof r.body === "string" ? r.body : "",
-        revisions: Array.isArray(r.revisions) ? r.revisions.map(normRevision) : [],
-      };
+      out.reflection = normReflection(r);
     } else {
       out.body = typeof e.body === "string" ? e.body : "";
       out.highlights = Array.isArray(e.highlights) ? e.highlights.filter((h) => h && h.endChar > h.startChar).map((h) => ({
@@ -286,7 +328,7 @@
   function entryToRow(e) {
     const data = { kind: e.kind || "transcription", source: e.source };
     if (e.kind === "reflection") {
-      data.reflection = e.reflection || { mode: "correct", body: "", revisions: [] };
+      data.reflection = e.reflection || { mode: "correct", blocks: [{ id: uid(), kind: "user", text: "" }] };
     } else {
       data.body = e.body; data.highlights = e.highlights;
       data.interpretation = e.interpretation; data.corrections = e.corrections; data.threads = e.threads;
@@ -410,8 +452,7 @@
       "bodyField","bodyRender","bodyEditWrap","bodyBackdrop","bodyInput","hlToolbar","slashMenu","slashMenuList","bodyHint","interpInput","interpSend","interpRevisions",
       "claudePanel","claudeHead","claudeTitle","claudeChevron","claudeBody","threadList","claudeCompose","claudeInput","claudeSend","claudeWarn",
       "reflectView","reflectDate","reflectWeekday","reflectStatus","reflectDeleteBtn","reflectAuthor","reflectTitle",
-      "reflectModes","reflectModeDesc","reflectBody","reflectSend","reflectRevCount",
-      "reflectResponse","reflectCorrected","reflectErrorsH","reflectErrors","reflectRespTs",
+      "reflectModes","reflectModeDesc","reflectRevCount","reflectBlocks","reflectAddBlock",
       "wordsView","wordsSub","wordsFilter","wordsSort","wordsGrid","sentencesView","sentencesSub","sentencesFilter","sentenceList",
       "thoughtsBtn","thoughtsCount","thoughtsView","thoughtsSub","thoughtsFilter","thoughtList",
       "projectsBtn","projectsCount","projectsView","projectsSort","projectsFilter","projectsGrid","projectsKindFilter","projectsNewBtn",
@@ -522,7 +563,7 @@
     if (presetSource && (presetSource.author || presetSource.title)) {
       setTimeout(() => {
         try {
-          if (kind === "reflection") D.reflectBody.focus();
+          if (kind === "reflection") { const ta = D.reflectBlocks.querySelector(".rb-user-input"); if (ta) ta.focus(); }
           else D.bodyInput.focus();
         } catch (_) {}
       }, 0);
@@ -621,7 +662,7 @@
   }
   function renderReflectEntry() {
     const e = currentEntry(); if (!e || e.kind !== "reflection") return;
-    if (!e.reflection || typeof e.reflection !== "object") e.reflection = { mode: "correct", body: "", revisions: [] };
+    if (!e.reflection || typeof e.reflection !== "object" || !Array.isArray(e.reflection.blocks)) e.reflection = normReflection(e.reflection);
     const r = e.reflection;
 
     D.reflectDate.value = e.date;
@@ -629,57 +670,106 @@
     D.reflectStatus.textContent = ""; D.reflectStatus.classList.remove("show");
     D.reflectAuthor.value = e.source.author;
     D.reflectTitle.value = e.source.title;
-    D.reflectBody.value = r.body;
 
-    D.reflectModes.querySelectorAll(".reflect-mode").forEach((b) => {
-      b.classList.toggle("is-on", b.dataset.mode === r.mode);
-    });
+    D.reflectModes.querySelectorAll(".reflect-mode").forEach((b) => b.classList.toggle("is-on", b.dataset.mode === r.mode));
     D.reflectModeDesc.textContent = modeDesc(r.mode);
 
-    D.reflectSend.disabled = reflectBusy;
-    { const lbl = D.reflectSend.querySelector(".reflect-send-label"); if (lbl) lbl.textContent = reflectBusy ? "보내는 중…" : "Claude에게 보내기"; }
-    D.reflectRevCount.textContent = r.revisions.length ? `${r.revisions.length}회 보냄` : "";
+    const sentCount = r.blocks.filter((b) => b.kind === "ai").length;
+    D.reflectRevCount.textContent = sentCount ? `${sentCount}회 보냄` : "";
 
-    const last = r.revisions.length ? r.revisions[r.revisions.length - 1] : null;
-    renderReflectResponse(last);
+    renderReflectBlocks();
   }
-  function renderReflectResponse(rev) {
-    if (!rev) { D.reflectResponse.hidden = true; return; }
-    D.reflectResponse.hidden = false;
-    D.reflectCorrected.textContent = rev.corrected || "(교정본 없음)";
-    if (rev.errors && rev.errors.length) {
-      D.reflectErrorsH.hidden = false;
-      D.reflectErrors.innerHTML = rev.errors.map((er) =>
-        `<li><span class="reflect-err-tag">${esc(er.tag)}</span><span class="reflect-err-detail">${esc(er.detail)}</span></li>`
-      ).join("");
-    } else {
-      D.reflectErrorsH.hidden = true;
-      D.reflectErrors.innerHTML = `<li><span class="reflect-err-tag" style="background:transparent;border:none;color:var(--color-text-tertiary);padding:0;">— 지적할 것이 없습니다.</span></li>`;
-    }
-    D.reflectRespTs.textContent = rev.timestamp ? fmtDate(rev.timestamp) + " " + String(rev.timestamp).slice(11, 16) : "";
-  }
-  async function sendReflection(modeArg) {
-    if (reflectBusy) return;
+  function renderReflectBlocks() {
     const e = currentEntry(); if (!e || e.kind !== "reflection") return;
-    if (!e.reflection) e.reflection = { mode: "correct", body: "", revisions: [] };
     const r = e.reflection;
-    r.body = D.reflectBody.value;
-    const text = r.body.trim();
-    if (!text) { D.reflectBody.focus(); toast("먼저 본문을 적어 주세요"); return; }
-    const mode = modeArg === "expand" || modeArg === "deep" ? modeArg : "correct"; // only 'correct' actually supported on the server for now
-    r.mode = mode;
+    D.reflectBlocks.innerHTML = r.blocks.map((b) => b.kind === "user" ? renderUserBlock(b) : renderAiBlock(b)).join("");
+    // wire textareas (set values + autogrow)
+    D.reflectBlocks.querySelectorAll(".rb-user-input").forEach((ta) => {
+      const id = ta.getAttribute("data-block");
+      const b = r.blocks.find((x) => x.id === id);
+      if (b) ta.value = b.text;
+      autoGrow(ta);
+    });
+  }
+  function renderUserBlock(b) {
+    return `<div class="rb-block rb-user" data-block="${escAttr(b.id)}">
+      <textarea class="rb-user-input" data-block="${escAttr(b.id)}" spellcheck="false"
+        placeholder="여기에 한 문단을 적습니다. ⌘↵ 로 보내면 아래에 교정·답이 옵니다."></textarea>
+      <div class="rb-user-foot">
+        <button class="rb-send" type="button" data-send="${escAttr(b.id)}" title="Claude에게 보내기 (⌘↵)">
+          <span class="tri">△</span><span>Claude에게 보내기</span><kbd>⌘↵</kbd>
+        </button>
+        <button class="rb-delete" type="button" data-del="${escAttr(b.id)}" title="이 문단 삭제">삭제</button>
+      </div>
+    </div>`;
+  }
+  function renderAiBlock(b) {
+    const errs = (b.errors && b.errors.length)
+      ? `<ul class="rb-ai-errors">${b.errors.map((er) => `<li><span class="reflect-err-tag">${esc(er.tag)}</span><span class="reflect-err-detail">${esc(er.detail)}</span></li>`).join("")}</ul>`
+      : (b._pending ? "" : `<div style="font-size:12px;color:var(--color-text-tertiary);margin-bottom:8px;">— 지적할 것이 없습니다.</div>`);
+    const ts = b.timestamp ? fmtDate(b.timestamp) + " " + String(b.timestamp).slice(11, 16) : "";
+    const corrected = b._pending ? "…교정 중" : (b.corrected || "(교정본 없음)");
+    return `<div class="rb-block rb-ai${b._pending ? " pending" : ""}" data-block="${escAttr(b.id)}">
+      <div class="rb-ai-h">교정</div>
+      <div class="rb-ai-corrected">${esc(corrected)}</div>
+      ${errs}
+      <div class="rb-ai-foot">
+        <span class="rb-ai-ts">${esc(ts)}</span>
+        ${b._pending ? "" : `<button class="rb-delete" type="button" data-del="${escAttr(b.id)}" title="이 답변 삭제">삭제</button>`}
+      </div>
+    </div>`;
+  }
+  function reflectAddUserBlock(focus) {
+    const e = currentEntry(); if (!e || e.kind !== "reflection") return;
+    const r = e.reflection;
+    const nb = { id: uid(), kind: "user", text: "" };
+    r.blocks.push(nb);
     touchEntry(e);
+    renderReflectBlocks();
+    if (focus) {
+      setTimeout(() => {
+        const ta = D.reflectBlocks.querySelector(`.rb-user-input[data-block="${nb.id}"]`);
+        if (ta) { ta.focus(); ta.scrollIntoView({ behavior: "smooth", block: "center" }); }
+      }, 20);
+    }
+    return nb.id;
+  }
+  function reflectDeleteBlock(id) {
+    const e = currentEntry(); if (!e || e.kind !== "reflection") return;
+    const r = e.reflection;
+    r.blocks = r.blocks.filter((b) => b.id !== id);
+    if (!r.blocks.length) r.blocks.push({ id: uid(), kind: "user", text: "" });
+    if (r.blocks[r.blocks.length - 1].kind !== "user") r.blocks.push({ id: uid(), kind: "user", text: "" });
+    touchEntry(e);
+    renderReflectBlocks();
+  }
+  async function sendReflectBlock(userBlockId) {
+    const e = currentEntry(); if (!e || e.kind !== "reflection") return;
+    const r = e.reflection;
+    const idx = r.blocks.findIndex((b) => b.id === userBlockId && b.kind === "user");
+    if (idx < 0) return;
+    const user = r.blocks[idx];
+    // pick up latest text from the live textarea (in case input event was missed)
+    const ta = D.reflectBlocks.querySelector(`.rb-user-input[data-block="${user.id}"]`);
+    if (ta) user.text = ta.value;
+    const text = (user.text || "").trim();
+    if (!text) { if (ta) ta.focus(); toast("먼저 문단을 적어 주세요"); return; }
 
-    reflectBusy = true;
-    D.reflectSend.disabled = true;
-    const lbl = D.reflectSend.querySelector(".reflect-send-label");
-    if (lbl) lbl.textContent = "보내는 중…";
+    // remove an existing AI block immediately after this user block (re-send replaces it)
+    if (idx + 1 < r.blocks.length && r.blocks[idx + 1].kind === "ai") r.blocks.splice(idx + 1, 1);
+
+    const mode = r.mode || "correct";
+    const pending = { id: uid(), kind: "ai", mode, input: text, corrected: "", errors: [], expressions: [], summary: "", questions: [], timestamp: nowISO(), _pending: true };
+    r.blocks.splice(idx + 1, 0, pending);
+    touchEntry(e);
+    renderReflectBlocks();
 
     try {
       const { data: sess } = await sb.auth.getSession();
       const tok = sess && sess.session ? sess.session.access_token : null;
       if (!tok) throw new Error("로그인이 필요합니다");
-      const context = { author: e.source.author || "", title: e.source.title || "" };
+      const priorContext = r.blocks.slice(0, idx).map((b) => b.kind === "user" ? `— 이전 문단: ${b.text}` : `— 이전 교정: ${b.corrected}`).join("\n");
+      const context = { author: e.source.author || "", title: e.source.title || "", body: priorContext || undefined };
       const resp = await fetch(CLAUDE_FN, {
         method: "POST",
         headers: { "Content-Type": "application/json", apikey: SUPABASE_KEY, Authorization: `Bearer ${tok}` },
@@ -688,27 +778,41 @@
       const out = await resp.json().catch(() => ({}));
       if (!resp.ok || out.error) throw new Error((out && out.error) ? out.error : `요청 실패 (${resp.status})`);
       const rr = out.reflect || {};
-      const rev = normRevision({
-        timestamp: nowISO(), mode,
-        input: text,
-        corrected: rr.corrected || "",
-        errors: rr.errors || [],
-        expressions: rr.expressions || [],
-        summary: rr.summary || "",
-        questions: rr.questions || [],
+      Object.assign(pending, {
+        corrected: typeof rr.corrected === "string" ? rr.corrected : "",
+        errors: Array.isArray(rr.errors) ? rr.errors : [],
+        expressions: Array.isArray(rr.expressions) ? rr.expressions : [],
+        summary: typeof rr.summary === "string" ? rr.summary : "",
+        questions: Array.isArray(rr.questions) ? rr.questions : [],
+        timestamp: nowISO(),
       });
-      r.revisions.push(rev);
+      delete pending._pending;
+      // auto-add a new empty user block right after and focus it
+      let nextId = null;
+      const aiIdx = r.blocks.findIndex((b) => b.id === pending.id);
+      if (aiIdx + 1 >= r.blocks.length || r.blocks[aiIdx + 1].kind !== "user" || r.blocks[aiIdx + 1].text.trim()) {
+        const nb = { id: uid(), kind: "user", text: "" };
+        r.blocks.splice(aiIdx + 1, 0, nb);
+        nextId = nb.id;
+      } else {
+        nextId = r.blocks[aiIdx + 1].id;
+      }
       touchEntry(e);
-      renderReflectResponse(rev);
-      D.reflectRevCount.textContent = `${r.revisions.length}회 보냄`;
+      const sentCount = r.blocks.filter((b) => b.kind === "ai").length;
+      D.reflectRevCount.textContent = sentCount ? `${sentCount}회 보냄` : "";
+      renderReflectBlocks();
       toast("교정 완료");
-      setTimeout(() => { try { D.reflectResponse.scrollIntoView({ behavior: "smooth", block: "start" }); } catch (_) {} }, 30);
+      setTimeout(() => {
+        const next = D.reflectBlocks.querySelector(`.rb-user-input[data-block="${nextId}"]`);
+        if (next) { next.focus(); next.scrollIntoView({ behavior: "smooth", block: "center" }); }
+      }, 30);
     } catch (err) {
+      // drop the pending placeholder on failure
+      const ai = r.blocks.find((b) => b.id === pending.id);
+      if (ai && ai._pending) r.blocks = r.blocks.filter((b) => b.id !== pending.id);
+      touchEntry(e);
+      renderReflectBlocks();
       toast("Claude 호출 실패 — " + (err.message || String(err)));
-    } finally {
-      reflectBusy = false;
-      D.reflectSend.disabled = false;
-      if (lbl) lbl.textContent = "Claude에게 보내기";
     }
   }
 
@@ -884,12 +988,9 @@
       }
     }
     e.body = newT;
-    if (!slashOpen) hideToolbar();
+    hideToolbar();
     renderBackdrop();
     touchEntry(e);
-    // slash menu: open on freshly typed `/`, otherwise update filter/close
-    if (slashOpen) updateSlash();
-    else maybeOpenSlash();
   }
 
   /* ── highlight / ask toolbar ── */
@@ -1528,9 +1629,12 @@
     const ordered = [...p.entries].sort((a, b) =>
       (+new Date(b.updatedAt || b.createdAt || 0)) - (+new Date(a.updatedAt || a.createdAt || 0)));
     for (const e of ordered) {
-      const t = e.kind === "reflection"
-        ? (e.reflection && e.reflection.body)
-        : e.body;
+      let t;
+      if (e.kind === "reflection") {
+        const blocks = (e.reflection && Array.isArray(e.reflection.blocks)) ? e.reflection.blocks : [];
+        const lastUser = [...blocks].reverse().find((b) => b.kind === "user" && b.text && b.text.trim());
+        t = lastUser ? lastUser.text : (e.reflection && e.reflection.body) || "";
+      } else t = e.body;
       if (t && t.trim()) return t.trim().slice(0, 220);
     }
     return "—";
@@ -1609,10 +1713,12 @@
       const num = list.length <= 600 ? toRoman(idx + 1) : String(idx + 1);
       let body, interp = "", corr = "", threads = "";
       if (e.kind === "reflection") {
-        const r = e.reflection || { body: "", revisions: [] };
-        const text = (r.body || "").trim();
+        const r = e.reflection || {};
+        const blocks = Array.isArray(r.blocks) ? r.blocks : [];
+        // surface only the writer's own paragraphs in art mode
+        const paras = blocks.filter((b) => b.kind === "user").map((b) => (b.text || "").trim()).filter(Boolean);
+        const text = paras.length ? paras.join("\n\n") : (r.body || "").trim();
         body = text ? esc(text).replace(/\n/g, "<br/>") : "";
-        // (in art mode we don't surface Claude's corrections — only the writer's own text)
       } else {
         body = buildArtBody(e);
         if (e.interpretation && e.interpretation.trim()) interp = `<div class="art-interp">${esc(e.interpretation)}</div>`;
@@ -1690,10 +1796,11 @@
     const f = thoughtsState.filter.trim().toLowerCase();
     const filtered = !f ? list : list.filter((e) => {
       const r = e.reflection || {};
+      const blocks = Array.isArray(r.blocks) ? r.blocks : [];
       const hay = [
-        r.body || "",
         srcLabel(e) || "",
-        ...(Array.isArray(r.revisions) ? r.revisions.flatMap((rv) => [rv.corrected || "", (rv.errors || []).map((er) => er.detail).join(" ")]) : []),
+        ...blocks.flatMap((b) => b.kind === "user" ? [b.text || ""] : [b.corrected || "", (b.errors || []).map((er) => er.detail).join(" ")]),
+        r.body || "",
       ].join("\n").toLowerCase();
       return hay.includes(f);
     });
@@ -1702,17 +1809,21 @@
       return;
     }
     D.thoughtList.innerHTML = filtered.map((e) => {
-      const r = e.reflection || { body: "", revisions: [] };
-      const last = r.revisions && r.revisions.length ? r.revisions[r.revisions.length - 1] : null;
-      const body = (r.body || "").trim();
+      const r = e.reflection || {};
+      const blocks = Array.isArray(r.blocks) ? r.blocks : [];
+      const userBlocks = blocks.filter((b) => b.kind === "user" && b.text && b.text.trim());
+      const aiBlocks = blocks.filter((b) => b.kind === "ai");
+      const lastUserText = userBlocks.length ? userBlocks[userBlocks.length - 1].text : (r.body || "");
+      const lastAi = aiBlocks.length ? aiBlocks[aiBlocks.length - 1] : null;
+      const body = lastUserText.trim();
       const src = srcLabel(e);
       const tagCounts = {};
-      if (last && Array.isArray(last.errors)) for (const er of last.errors) tagCounts[er.tag] = (tagCounts[er.tag] || 0) + 1;
+      if (lastAi && Array.isArray(lastAi.errors)) for (const er of lastAi.errors) tagCounts[er.tag] = (tagCounts[er.tag] || 0) + 1;
       const tagPills = Object.entries(tagCounts)
         .sort((a, b) => b[1] - a[1])
         .slice(0, 4)
         .map(([t, n]) => `<span class="reflect-err-tag">${esc(t)}·${n}</span>`).join(" ");
-      const rev = r.revisions ? r.revisions.length : 0;
+      const rev = aiBlocks.length;
       return `<button type="button" class="thought-row" data-open-entry="${escAttr(e.id)}">
         <div class="thought-row-top">
           <div class="thought-row-date">${esc(fmtDate(e.date))}</div>
@@ -1970,19 +2081,34 @@
     });
     D.reflectAuthor.addEventListener("input", () => { const e = currentEntry(); if (!e) return; e.source.author = D.reflectAuthor.value; touchEntry(e); renderRecentList(); });
     D.reflectTitle.addEventListener("input", () => { const e = currentEntry(); if (!e) return; e.source.title = D.reflectTitle.value; touchEntry(e); renderRecentList(); });
-    D.reflectBody.addEventListener("input", () => {
+
+    // chain blocks
+    D.reflectBlocks.addEventListener("input", (ev) => {
+      const ta = ev.target.closest(".rb-user-input"); if (!ta) return;
       const e = currentEntry(); if (!e || e.kind !== "reflection") return;
-      if (!e.reflection) e.reflection = { mode: "correct", body: "", revisions: [] };
-      e.reflection.body = D.reflectBody.value; touchEntry(e);
+      const id = ta.dataset.block;
+      const b = e.reflection.blocks.find((x) => x.id === id);
+      if (b) { b.text = ta.value; touchEntry(e); autoGrow(ta); }
     });
-    D.reflectBody.addEventListener("keydown", (ev) => {
-      if ((ev.metaKey || ev.ctrlKey) && ev.key === "Enter") { ev.preventDefault(); sendReflection(); }
+    D.reflectBlocks.addEventListener("keydown", (ev) => {
+      if (!ev.target.matches(".rb-user-input")) return;
+      if ((ev.metaKey || ev.ctrlKey) && ev.key === "Enter") {
+        ev.preventDefault();
+        sendReflectBlock(ev.target.dataset.block);
+      }
     });
-    D.reflectSend.addEventListener("click", () => sendReflection());
+    D.reflectBlocks.addEventListener("click", (ev) => {
+      const send = ev.target.closest("[data-send]");
+      if (send) { sendReflectBlock(send.dataset.send); return; }
+      const del = ev.target.closest("[data-del]");
+      if (del) { reflectDeleteBlock(del.dataset.del); return; }
+    });
+    D.reflectAddBlock.addEventListener("click", () => reflectAddUserBlock(true));
+
     D.reflectModes.addEventListener("click", (ev) => {
       const b = ev.target.closest(".reflect-mode"); if (!b || b.disabled) return;
       const e = currentEntry(); if (!e || e.kind !== "reflection") return;
-      if (!e.reflection) e.reflection = { mode: "correct", body: "", revisions: [] };
+      if (!e.reflection || !Array.isArray(e.reflection.blocks)) e.reflection = normReflection(e.reflection);
       e.reflection.mode = b.dataset.mode || "correct";
       touchEntry(e);
       D.reflectModes.querySelectorAll(".reflect-mode").forEach((x) => x.classList.toggle("is-on", x === b));
