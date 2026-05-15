@@ -407,7 +407,7 @@
       "app","sidebar","sidebarToggle","wordmark","syncDot","newEntryBtn","searchBtn","wordsBtn","sentencesBtn",
       "wordsCount","sentencesCount","recentList","exportBtn","importBtn","signOutBtn","importInput","sidebarReopen","main",
       "emptyState","emptyNewBtn","entryView","entryDate","entryWeekday","entryStatus","deleteEntryBtn","srcAuthor","srcTitle","srcPage",
-      "bodyField","bodyRender","bodyEditWrap","bodyBackdrop","bodyInput","hlToolbar","bodyHint","interpInput","interpSend","interpRevisions",
+      "bodyField","bodyRender","bodyEditWrap","bodyBackdrop","bodyInput","hlToolbar","slashMenu","slashMenuList","bodyHint","interpInput","interpSend","interpRevisions",
       "claudePanel","claudeHead","claudeTitle","claudeChevron","claudeBody","threadList","claudeCompose","claudeInput","claudeSend","claudeWarn",
       "reflectView","reflectDate","reflectWeekday","reflectStatus","reflectDeleteBtn","reflectAuthor","reflectTitle",
       "reflectModes","reflectModeDesc","reflectBody","reflectSend","reflectRevCount",
@@ -713,24 +713,6 @@
   }
 
   /* ── body: read-mode rendering ── */
-  function buildEvents(e) {
-    const len = e.body.length;
-    const hls = [...e.highlights].map((h) => ({ ...h, startChar: clamp(h.startChar, 0, len), endChar: clamp(h.endChar, 0, len) }))
-      .filter((h) => h.endChar > h.startChar).sort((a, b) => a.startChar - b.startChar);
-    // drop overlaps
-    const clean = []; let last = -1;
-    for (const h of hls) { if (h.startChar >= last) { clean.push(h); last = h.endChar; } }
-    const ev = [];
-    for (const h of clean) {
-      ev.push({ pos: h.startChar, k: 2, hl: h });
-      ev.push({ pos: h.endChar, k: 0, hl: h });
-    }
-    for (const t of e.threads) {
-      if (Number.isFinite(t.anchorChar)) ev.push({ pos: clamp(t.anchorChar, 0, len), k: 1, thread: t });
-    }
-    ev.sort((a, b) => a.pos - b.pos || a.k - b.k);
-    return ev;
-  }
   function termWrap(seg) {
     if (!seg) return "";
     if (!termWords.size) return esc(seg);
@@ -758,23 +740,75 @@
     a += ` data-hl="${escAttr(hl.id)}"`;
     return a;
   }
+  // Line-aware rendering: each text line becomes its own <div class="line line-…">.
+  // Block kinds are detected by line prefixes (`# `, `## `, `> `) or a divider pattern.
+  // Highlights are split at `\n` boundaries so marks never cross line divs.
   function buildBodyHtml(e, opts) {
     opts = opts || {};
     const text = e.body;
     if (!text) return "";
-    const ev = buildEvents(e);
-    let html = "", cur = 0, inHl = null;
-    for (const x of ev) {
-      const seg = text.slice(cur, x.pos);
-      html += inHl ? esc(seg) : termWrap(seg);
-      cur = x.pos;
-      if (x.k === 2) { inHl = x.hl; html += `<mark${markAttrs(x.hl, e)}>`; }
-      else if (x.k === 0) { html += "</mark>"; inHl = null; }
-      else if (x.k === 1) { html += `<sup class="thread-anchor" data-thread="${escAttr(x.thread.id)}" title="Claude 대화"></sup>`; }
+    const splitHls = [];
+    for (const h of (e.highlights || [])) {
+      if (!(h.endChar > h.startChar)) continue;
+      let s = clamp(h.startChar, 0, text.length);
+      const e2 = clamp(h.endChar, 0, text.length);
+      while (s < e2) {
+        const nl = text.indexOf("\n", s);
+        const segEnd = nl === -1 || nl >= e2 ? e2 : nl;
+        if (segEnd > s) splitHls.push({ ...h, startChar: s, endChar: segEnd });
+        if (nl === -1 || nl >= e2) break;
+        s = nl + 1;
+      }
     }
-    const tail = text.slice(cur);
-    html += inHl ? esc(tail) : termWrap(tail);
-    if (inHl) html += "</mark>";
+    splitHls.sort((a, b) => a.startChar - b.startChar);
+    const cleanHls = []; let lastEnd = -1;
+    for (const h of splitHls) { if (h.startChar >= lastEnd) { cleanHls.push(h); lastEnd = h.endChar; } }
+    const events = [];
+    for (const h of cleanHls) {
+      events.push({ pos: h.startChar, k: 2, hl: h });
+      events.push({ pos: h.endChar,   k: 0, hl: h });
+    }
+    for (const t of (e.threads || [])) {
+      if (Number.isFinite(t.anchorChar)) events.push({ pos: clamp(t.anchorChar, 0, text.length), k: 1, thread: t });
+    }
+    events.sort((a, b) => a.pos - b.pos || a.k - b.k);
+
+    const lines = text.split("\n");
+    let html = "", evIdx = 0, charPos = 0;
+    for (let li = 0; li < lines.length; li++) {
+      const L = lines[li];
+      const lineStart = charPos;
+      const lineEnd   = charPos + L.length;
+      const trimmed = L.trim();
+      let cls = "line line-para", isDivider = false;
+      if (/^# /.test(L))        cls = "line line-h1";
+      else if (/^## /.test(L))  cls = "line line-h2";
+      else if (/^> /.test(L))   cls = "line line-quote";
+      else if (trimmed && /^(?:·\s*){2,}·?\s*$|^[─—\-]{3,}\s*$/.test(trimmed)) { cls = "line line-divider"; isDivider = true; }
+      if (isDivider) {
+        while (evIdx < events.length && events[evIdx].pos <= lineEnd) evIdx++;
+        html += `<div class="${cls}" aria-hidden="true"><hr></div>`;
+        charPos = lineEnd + 1;
+        continue;
+      }
+      let lineHtml = "", cur = lineStart, inHl = null;
+      while (evIdx < events.length && events[evIdx].pos <= lineEnd) {
+        const x = events[evIdx];
+        const seg = text.slice(cur, x.pos);
+        lineHtml += inHl ? esc(seg) : termWrap(seg);
+        cur = x.pos;
+        if (x.k === 2)      { inHl = x.hl; lineHtml += `<mark${markAttrs(x.hl, e)}>`; }
+        else if (x.k === 0) { lineHtml += "</mark>"; inHl = null; }
+        else if (x.k === 1) { lineHtml += `<sup class="thread-anchor" data-thread="${escAttr(x.thread.id)}" title="Claude 대화"></sup>`; }
+        evIdx++;
+      }
+      const tail = text.slice(cur, lineEnd);
+      lineHtml += inHl ? esc(tail) : termWrap(tail);
+      if (inHl) { lineHtml += "</mark>"; inHl = null; }
+      if (!lineHtml) lineHtml = "&#8203;"; // keep empty lines tall enough
+      html += `<div class="${cls}">${lineHtml}</div>`;
+      charPos = lineEnd + 1;
+    }
     return html;
   }
   function renderBodyRead() {
@@ -801,6 +835,7 @@
     D.bodyEditWrap.hidden = true; D.bodyRender.hidden = false;
     renderBodyRead();
     hideToolbar();
+    closeSlashMenu();
   }
   function renderBackdrop() {
     const e = currentEntry();
@@ -849,9 +884,12 @@
       }
     }
     e.body = newT;
-    hideToolbar();
+    if (!slashOpen) hideToolbar();
     renderBackdrop();
     touchEntry(e);
+    // slash menu: open on freshly typed `/`, otherwise update filter/close
+    if (slashOpen) updateSlash();
+    else maybeOpenSlash();
   }
 
   /* ── highlight / ask toolbar ── */
@@ -939,6 +977,100 @@
     setComposeAnchor(th);
     D.claudeInput.focus();
     D.claudePanel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  /* ── slash menu (Notion-like block insertion in the body editor) ── */
+  const SLASH_BLOCKS = [
+    { key: "para",    label: "단락",     hint: "빈 줄로 새 단락 시작",      icon: "¶",  ins: "\n\n",            keys: ["단락","문단","paragraph","para","p"] },
+    { key: "h1",      label: "큰 제목",   hint: "한 줄짜리 제목",            icon: "H1", ins: "\n\n# ",           keys: ["큰제목","heading","title","h1","#"] },
+    { key: "h2",      label: "작은 제목", hint: "한 줄짜리 소제목",          icon: "H2", ins: "\n\n## ",          keys: ["작은제목","소제목","subheading","h2","##"] },
+    { key: "quote",   label: "인용",     hint: "이탤릭 인용 블록",          icon: "❝",  ins: "\n\n> ",           keys: ["인용","quote","blockquote","q",">"] },
+    { key: "divider", label: "구분선",   hint: "두 단락 사이 가는 줄",       icon: "—",  ins: "\n\n· · ·\n\n",    keys: ["구분선","divider","line","hr","---","···"] },
+  ];
+  let slashOpen = false, slashStart = -1, slashFilter = "", slashIndex = 0;
+
+  function filteredSlash() {
+    const f = slashFilter.trim().toLowerCase();
+    if (!f) return SLASH_BLOCKS.slice();
+    return SLASH_BLOCKS.filter((b) =>
+      b.keys.some((k) => k.toLowerCase().startsWith(f) || k.toLowerCase().includes(f)) ||
+      b.label.toLowerCase().includes(f)
+    );
+  }
+  function renderSlashMenu() {
+    const list = filteredSlash();
+    if (!list.length) { D.slashMenuList.innerHTML = '<li class="slash-empty">결과 없음</li>'; return; }
+    if (slashIndex >= list.length) slashIndex = 0;
+    D.slashMenuList.innerHTML = list.map((b, i) =>
+      `<li class="slash-item${i === slashIndex ? " is-on" : ""}" data-key="${escAttr(b.key)}">
+         <span class="slash-icon">${esc(b.icon)}</span>
+         <span class="slash-text"><span class="slash-label">${esc(b.label)}</span><span class="slash-hint">${esc(b.hint)}</span></span>
+       </li>`
+    ).join("");
+  }
+  function positionSlashMenu() {
+    if (!slashOpen) return;
+    const { pr, fr, mr } = measureRange(slashStart, slashStart + 1);
+    const mw = D.slashMenu.offsetWidth || 240, mh = D.slashMenu.offsetHeight || 200;
+    let left = pr.left - fr.left;
+    left = clamp(left, 8, Math.max(8, fr.width - mw - 8));
+    let top = pr.bottom - fr.top + 4;
+    if (pr.bottom + mh + 16 > mr.bottom) top = pr.top - fr.top - mh - 6; // flip above if not enough room below
+    D.slashMenu.style.left = left + "px";
+    D.slashMenu.style.top = top + "px";
+  }
+  function openSlashMenu(slashPos, cursorPos) {
+    slashOpen = true;
+    slashStart = slashPos;
+    slashIndex = 0;
+    slashFilter = D.bodyInput.value.slice(slashPos + 1, cursorPos);
+    D.slashMenu.hidden = false;
+    renderSlashMenu();
+    positionSlashMenu();
+    hideToolbar(); // don't compete with the highlight toolbar
+  }
+  function closeSlashMenu() { slashOpen = false; D.slashMenu.hidden = true; slashFilter = ""; slashStart = -1; }
+  function maybeOpenSlash() {
+    if (!editing || slashOpen) return;
+    const v = D.bodyInput.value, pos = D.bodyInput.selectionStart;
+    if (pos < 1 || v[pos - 1] !== "/") return;
+    // open only at the start of the textarea or after whitespace
+    if (pos > 1 && !/\s/.test(v[pos - 2])) return;
+    openSlashMenu(pos - 1, pos);
+  }
+  function updateSlash() {
+    if (!slashOpen) return;
+    const v = D.bodyInput.value, pos = D.bodyInput.selectionStart;
+    if (slashStart < 0 || pos <= slashStart || v[slashStart] !== "/") { closeSlashMenu(); return; }
+    const filter = v.slice(slashStart + 1, pos);
+    if (/\s|\//.test(filter) || filter.length > 14) { closeSlashMenu(); return; }
+    slashFilter = filter; slashIndex = 0;
+    renderSlashMenu();
+    positionSlashMenu();
+  }
+  function applySlash(tpl) {
+    const text = D.bodyInput.value;
+    const start = slashStart, end = D.bodyInput.selectionStart;
+    if (start < 0 || end < start) { closeSlashMenu(); return; }
+    const before = text.slice(0, start), after = text.slice(end);
+    let ins = tpl.ins;
+    // avoid stacking blank lines: trim leading \n's already present at the cursor
+    const beforeNL = (before.match(/\n*$/) || [""])[0].length;
+    const insLeadNL = (ins.match(/^\n*/) || [""])[0].length;
+    ins = ins.slice(Math.min(insLeadNL, beforeNL));
+    if (start === 0) ins = ins.replace(/^\n+/, "");
+    const newText = before + ins + after;
+    D.bodyInput.value = newText;
+    const caret = before.length + ins.length;
+    try { D.bodyInput.setSelectionRange(caret, caret); } catch (_) {}
+    closeSlashMenu();
+    onBodyInput();
+    autoGrowBodyArea();
+    D.bodyInput.focus();
+  }
+  function autoGrowBodyArea() {
+    // backdrop drives the field height — rebuild it so the textarea fills correctly
+    renderBackdrop();
   }
 
   /* ── interpretation ── */
@@ -1887,13 +2019,39 @@
     // body: edit mode
     D.bodyInput.addEventListener("input", onBodyInput);
     D.bodyInput.addEventListener("blur", () => setTimeout(() => { if (document.activeElement !== D.bodyInput) exitEdit(); }, 80));
-    D.bodyInput.addEventListener("mousedown", hideToolbar);
+    D.bodyInput.addEventListener("mousedown", () => { hideToolbar(); closeSlashMenu(); });
     D.bodyInput.addEventListener("mouseup", () => setTimeout(onBodySelChange, 0));
+    D.bodyInput.addEventListener("keydown", (ev) => {
+      if (!slashOpen) return;
+      const list = filteredSlash();
+      if (ev.key === "Escape") { ev.preventDefault(); closeSlashMenu(); return; }
+      if (!list.length) {
+        if (ev.key === "Enter" || ev.key === "Tab" || ev.key === "ArrowDown" || ev.key === "ArrowUp") closeSlashMenu();
+        return;
+      }
+      if (ev.key === "ArrowDown") { ev.preventDefault(); slashIndex = (slashIndex + 1) % list.length; renderSlashMenu(); return; }
+      if (ev.key === "ArrowUp")   { ev.preventDefault(); slashIndex = (slashIndex - 1 + list.length) % list.length; renderSlashMenu(); return; }
+      if (ev.key === "Enter" || ev.key === "Tab") { ev.preventDefault(); applySlash(list[slashIndex]); return; }
+    });
     D.bodyInput.addEventListener("keyup", (ev) => {
       if (ev.shiftKey || /Arrow|Home|End/.test(ev.key) || ((ev.ctrlKey || ev.metaKey) && /^a$/i.test(ev.key))) onBodySelChange();
     });
     D.hlToolbar.addEventListener("mousedown", (ev) => ev.preventDefault());
     D.hlToolbar.querySelectorAll(".hl-btn").forEach((b) => b.addEventListener("click", () => applyHighlight(b.dataset.type)));
+
+    // slash menu
+    D.slashMenu.addEventListener("mousedown", (ev) => ev.preventDefault()); // keep textarea focus & selection
+    D.slashMenuList.addEventListener("mouseover", (ev) => {
+      const it = ev.target.closest(".slash-item"); if (!it) return;
+      const list = filteredSlash();
+      const k = it.dataset.key; const idx = list.findIndex((b) => b.key === k);
+      if (idx >= 0 && idx !== slashIndex) { slashIndex = idx; renderSlashMenu(); }
+    });
+    D.slashMenuList.addEventListener("click", (ev) => {
+      const it = ev.target.closest(".slash-item"); if (!it) return;
+      const tpl = SLASH_BLOCKS.find((b) => b.key === it.dataset.key);
+      if (tpl) applySlash(tpl);
+    });
 
     // interpretation
     D.interpInput.addEventListener("focus", () => { const e = currentEntry(); interpSnapshot = e ? e.interpretation : D.interpInput.value; });
@@ -2002,7 +2160,10 @@
     D.modalScrim.addEventListener("mousedown", (ev) => { if (ev.target === D.modalScrim) closeModal(); });
 
     // global
-    document.addEventListener("mousedown", (ev) => { if (!D.hlToolbar.hidden && !D.bodyField.contains(ev.target)) hideToolbar(); }, true);
+    document.addEventListener("mousedown", (ev) => {
+      if (!D.hlToolbar.hidden && !D.bodyField.contains(ev.target)) hideToolbar();
+      if (slashOpen && !D.slashMenu.contains(ev.target) && ev.target !== D.bodyInput) closeSlashMenu();
+    }, true);
     document.addEventListener("keydown", (ev) => {
       if (!user) return;
       const mod = ev.metaKey || ev.ctrlKey;
@@ -2010,7 +2171,7 @@
       if (mod && /^n$/i.test(ev.key)) { ev.preventDefault(); newEntry(); return; }
       if (mod && /^s$/i.test(ev.key)) { ev.preventDefault(); flushSyncNow(); flashStatus("저장됨"); return; }
       if (mod && (ev.key === "1" || ev.key === "2") && editing && pendingSel) { ev.preventDefault(); applyHighlight(ev.key === "1" ? "yellow" : "blue"); return; }
-      if (ev.key === "Escape") { if (!D.modalScrim.hidden) closeModal(); else if (!D.searchScrim.hidden) closeSearch(); else hideToolbar(); hideWordTip(); }
+      if (ev.key === "Escape") { if (!D.modalScrim.hidden) closeModal(); else if (!D.searchScrim.hidden) closeSearch(); else { closeSlashMenu(); hideToolbar(); } hideWordTip(); }
     });
     window.addEventListener("resize", () => { applySidebar(); if (!D.entryView.hidden) autoGrow(D.interpInput); autoGrow(D.claudeInput, 160); hideToolbar(); hideWordTip(); });
     window.addEventListener("hashchange", renderRoute);
