@@ -869,6 +869,58 @@ a { color: inherit; }
 }
 .rb-add { margin-top: 14px; }
 .add-paragraph-btn { margin-top: 28px; }
+
+/* ── static passage cards (other passages in the same transcription doc) ── */
+.passages-static { display: flex; flex-direction: column; gap: 22px; margin: 4px 0; }
+#passagesBefore:not(:empty) { margin-bottom: 28px; }
+#passagesAfter:not(:empty)  { margin-top: 32px; padding-top: 22px; border-top: 0.5px dashed var(--color-border-tertiary); }
+.passage-card {
+  position: relative;
+  padding: 16px 18px; border-radius: 8px;
+  background: var(--color-background-secondary);
+  border: 0.5px solid var(--color-border-tertiary);
+  cursor: pointer; transition: border-color 0.15s, background-color 0.15s;
+}
+.passage-card:hover { border-color: var(--color-text-tertiary); }
+.passage-card-h {
+  font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase;
+  color: var(--color-text-tertiary); margin-bottom: 8px;
+  display: flex; align-items: center; gap: 8px;
+}
+.passage-card-num { font-family: var(--font-serif); font-style: italic; }
+.passage-card-meta { margin-left: auto; font-size: 10.5px; }
+.passage-card-body {
+  font-family: var(--font-serif); font-size: 14.5px; line-height: 1.7;
+  color: var(--color-text-primary);
+  max-height: 5.6em; overflow: hidden; position: relative;
+}
+.passage-card-body::after {
+  content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 1.8em;
+  background: linear-gradient(180deg, transparent, var(--color-background-secondary));
+  pointer-events: none;
+}
+.passage-card-body.tall { max-height: none; }
+.passage-card-body.tall::after { display: none; }
+.passage-card-interp {
+  margin-top: 10px; padding-left: 10px; border-left: 2px solid var(--color-border-tertiary);
+  font-family: var(--font-korean); font-style: italic; font-size: 13px; line-height: 1.7;
+  color: var(--color-text-secondary);
+  max-height: 4.5em; overflow: hidden;
+  white-space: pre-wrap;
+}
+.passage-card-claude { margin-top: 10px; font-size: 11px; color: var(--color-text-tertiary); }
+.passage-card-del {
+  position: absolute; top: 10px; right: 10px;
+  font-size: 11px; color: var(--color-text-tertiary);
+  opacity: 0; transition: opacity 0.15s, color 0.15s;
+}
+.passage-card:hover .passage-card-del { opacity: 0.6; }
+.passage-card-del:hover { opacity: 1; color: #b03b2e; }
+.active-passage-num {
+  font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase;
+  color: var(--color-text-tertiary); margin-bottom: 10px;
+  font-family: var(--font-serif); font-style: italic;
+}
 .rb-add:hover, .add-paragraph-btn:hover {
   color: var(--color-text-primary); border-color: var(--color-text-tertiary);
   background: var(--color-background-secondary);

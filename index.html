@@ -123,6 +123,9 @@
 
       <div class="entry-divider"></div>
 
+      <!-- earlier passages (rendered as read-only cards above the active editor) -->
+      <div class="passages-static" id="passagesBefore"></div>
+
       <!-- BODY -->
       <section class="block block--body">
         <div class="text-field" id="bodyField">
@@ -179,6 +182,9 @@
           <div class="claude-warn" id="claudeWarn" hidden></div>
         </div>
       </section>
+
+      <!-- later passages (rendered as read-only cards below the active editor) -->
+      <div class="passages-static" id="passagesAfter"></div>
 
       <button class="add-paragraph-btn" id="addParagraphBtn" type="button" title="이 문서에 새 문단 추가">
         + 새 문단 추가

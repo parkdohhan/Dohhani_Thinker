@@ -109,6 +109,7 @@
   let user = null; // { id, email }
   let state = newVault();
   let currentId = null; // open entry id
+  let currentPassageId = null; // active passage in the open transcription entry
   let activeThreadId = null; // thread receiving compose messages
   let editing = false; // body edit mode
   let online = navigator.onLine;
@@ -130,10 +131,33 @@
     if (kind === "reflection") {
       base.reflection = { mode: "correct", blocks: [{ id: uid(), kind: "user", text: "" }] };
     } else {
-      base.body = ""; base.highlights = []; base.interpretation = "";
-      base.corrections = []; base.threads = [];
+      const p0 = blankPassage();
+      base.passages = [p0];
+      // top-level mirrors the active passage (first by default)
+      base.body = p0.body; base.highlights = p0.highlights; base.interpretation = p0.interpretation;
+      base.corrections = p0.corrections; base.threads = p0.threads;
     }
     return base;
+  }
+  function blankPassage() {
+    return { id: uid(), body: "", highlights: [], interpretation: "", corrections: [], threads: [] };
+  }
+  function normPassage(p) {
+    p = p && typeof p === "object" ? p : {};
+    return {
+      id: typeof p.id === "string" ? p.id : uid(),
+      body: typeof p.body === "string" ? p.body : "",
+      highlights: Array.isArray(p.highlights) ? p.highlights.filter((h) => h && h.endChar > h.startChar).map((h) => ({
+        id: h.id || uid(), startChar: h.startChar | 0, endChar: h.endChar | 0,
+        type: h.type === "blue" ? "blue" : "yellow", note: h.note || "",
+      })) : [],
+      interpretation: typeof p.interpretation === "string" ? p.interpretation : "",
+      corrections: Array.isArray(p.corrections) ? p.corrections.filter((c) => c && typeof c === "object").map((c) => ({
+        timestamp: c.timestamp || nowISO(), previousText: c.previousText || "", newText: c.newText || "",
+      })) : [],
+      threads: Array.isArray(p.threads) ? p.threads.map(normThread)
+              : (Array.isArray(p.messages) ? migrateMessages(p.messages) : []),
+    };
   }
   function normRevision(r) {
     r = r && typeof r === "object" ? r : {};
@@ -213,16 +237,23 @@
       const r = e.reflection && typeof e.reflection === "object" ? e.reflection : {};
       out.reflection = normReflection(r);
     } else {
-      out.body = typeof e.body === "string" ? e.body : "";
-      out.highlights = Array.isArray(e.highlights) ? e.highlights.filter((h) => h && h.endChar > h.startChar).map((h) => ({
-        id: h.id || uid(), startChar: h.startChar | 0, endChar: h.endChar | 0,
-        type: h.type === "blue" ? "blue" : "yellow", note: h.note || "",
-      })) : [];
-      out.interpretation = typeof e.interpretation === "string" ? e.interpretation : "";
-      out.corrections = Array.isArray(e.corrections) ? e.corrections.filter((c) => c && typeof c === "object").map((c) => ({
-        timestamp: c.timestamp || nowISO(), previousText: c.previousText || "", newText: c.newText || "",
-      })) : [];
-      out.threads = Array.isArray(e.threads) ? e.threads.map(normThread) : (Array.isArray(e.messages) ? migrateMessages(e.messages) : []);
+      let passages;
+      if (Array.isArray(e.passages) && e.passages.length) {
+        passages = e.passages.map(normPassage);
+      } else {
+        passages = [normPassage({
+          id: uid(), body: e.body, highlights: e.highlights,
+          interpretation: e.interpretation, corrections: e.corrections,
+          threads: e.threads, messages: e.messages,
+        })];
+      }
+      out.passages = passages;
+      const p0 = passages[0];
+      out.body = p0.body;
+      out.highlights = p0.highlights;
+      out.interpretation = p0.interpretation;
+      out.corrections = p0.corrections;
+      out.threads = p0.threads;
     }
     return out;
   }
@@ -272,7 +303,86 @@
   function entriesChrono() {
     return [...state.entries].sort((a, b) => a.date.localeCompare(b.date) || String(a.createdAt).localeCompare(String(b.createdAt)));
   }
-  function touchEntry(e) { if (!e) return; e.updatedAt = nowISO(); dirtyEntries.add(e.id); scheduleSync(); cacheLocal(); }
+  function touchEntry(e) { if (!e) return; e.updatedAt = nowISO(); syncTopLevelToPassage(e); dirtyEntries.add(e.id); scheduleSync(); cacheLocal(); }
+
+  /* ── passages (multiple body/interp/claude blocks per transcription entry) ── */
+  function activePassage(e) {
+    if (!e || e.kind !== "transcription" || !Array.isArray(e.passages)) return null;
+    return e.passages.find((p) => p.id === currentPassageId) || e.passages[0] || null;
+  }
+  function syncTopLevelToPassage(e) {
+    if (!e || e.kind !== "transcription") return;
+    if (!Array.isArray(e.passages) || !e.passages.length) return;
+    const idx = e.passages.findIndex((p) => p.id === currentPassageId);
+    const i = idx >= 0 ? idx : 0;
+    const p = e.passages[i];
+    p.body = e.body || "";
+    p.highlights = e.highlights || [];
+    p.interpretation = e.interpretation || "";
+    p.corrections = e.corrections || [];
+    p.threads = e.threads || [];
+  }
+  function loadPassageIntoTopLevel(e, passId) {
+    if (!e || e.kind !== "transcription") return;
+    const p = (Array.isArray(e.passages) && e.passages.find((x) => x.id === passId)) || (e.passages && e.passages[0]);
+    if (!p) return;
+    currentPassageId = p.id;
+    e.body = p.body || "";
+    e.highlights = p.highlights || [];
+    e.interpretation = p.interpretation || "";
+    e.corrections = p.corrections || [];
+    e.threads = p.threads || [];
+  }
+  function switchActivePassage(passId) {
+    const e = currentEntry();
+    if (!e || e.kind !== "transcription") return;
+    if (passId === currentPassageId) return;
+    if (editing) { try { exitEdit(); } catch (_) {} }
+    captureInterpCorrection();
+    syncTopLevelToPassage(e);
+    loadPassageIntoTopLevel(e, passId);
+    renderEntry();
+    setTimeout(() => {
+      const card = D.passagesContainer && D.passagesContainer.querySelector(`[data-pass="${passId}"]`);
+      if (card) card.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 30);
+  }
+  function addPassageToCurrent() {
+    const e = currentEntry();
+    if (!e || e.kind !== "reflection") {
+      if (!e) return;
+      // sync current edits first
+      syncTopLevelToPassage(e);
+      const np = blankPassage();
+      if (!Array.isArray(e.passages)) e.passages = [];
+      e.passages.push(np);
+      loadPassageIntoTopLevel(e, np.id);
+      touchEntry(e);
+      renderEntry();
+      setTimeout(() => {
+        try { D.bodyRender.scrollIntoView({ behavior: "smooth", block: "start" }); } catch (_) {}
+        // jump straight into edit on the new (empty) passage
+        try { if (typeof enterEdit === "function") enterEdit(0); } catch (_) {}
+      }, 40);
+    }
+  }
+  function deletePassage(passId) {
+    const e = currentEntry();
+    if (!e || e.kind !== "transcription" || !Array.isArray(e.passages)) return;
+    if (e.passages.length <= 1) { toast("문단이 하나뿐입니다 — 삭제 대신 내용을 비워 보세요."); return; }
+    const idx = e.passages.findIndex((p) => p.id === passId);
+    if (idx < 0) return;
+    const wasActive = passId === currentPassageId;
+    // remove threads of this passage from terms encounters (those records live in app_state.terms)
+    // — terms point to entryId only, so no per-passage cleanup needed here
+    e.passages.splice(idx, 1);
+    if (wasActive) {
+      const nextIdx = Math.min(idx, e.passages.length - 1);
+      loadPassageIntoTopLevel(e, e.passages[nextIdx].id);
+    }
+    touchEntry(e);
+    renderEntry();
+  }
   function touchAppState() { dirtyAppState = true; scheduleSync(); cacheLocal(); }
 
   /* ─────────────────────── TERMS ─────────────────────── */
@@ -330,6 +440,9 @@
     if (e.kind === "reflection") {
       data.reflection = e.reflection || { mode: "correct", blocks: [{ id: uid(), kind: "user", text: "" }] };
     } else {
+      syncTopLevelToPassage(e); // make sure passages[active] holds latest top-level edits
+      data.passages = e.passages || [];
+      // also persist the active passage's content at top level so older readers still work
       data.body = e.body; data.highlights = e.highlights;
       data.interpretation = e.interpretation; data.corrections = e.corrections; data.threads = e.threads;
     }
@@ -450,7 +563,7 @@
       "wordsCount","sentencesCount","recentList","exportBtn","importBtn","signOutBtn","importInput","sidebarReopen","main",
       "emptyState","emptyNewBtn","entryView","entryDate","entryWeekday","entryStatus","deleteEntryBtn","srcAuthor","srcTitle","srcPage",
       "bodyField","bodyRender","bodyEditWrap","bodyBackdrop","bodyInput","hlToolbar","slashMenu","slashMenuList","bodyHint","interpInput","interpSend","interpRevisions",
-      "claudePanel","claudeHead","claudeTitle","claudeChevron","claudeBody","threadList","claudeCompose","claudeInput","claudeSend","claudeWarn","addParagraphBtn",
+      "claudePanel","claudeHead","claudeTitle","claudeChevron","claudeBody","threadList","claudeCompose","claudeInput","claudeSend","claudeWarn","addParagraphBtn","passagesBefore","passagesAfter",
       "reflectView","reflectDate","reflectWeekday","reflectStatus","reflectDeleteBtn","reflectAuthor","reflectTitle",
       "reflectModes","reflectModeDesc","reflectRevCount","reflectBlocks","reflectAddBlock",
       "wordsView","wordsSub","wordsFilter","wordsSort","wordsGrid","sentencesView","sentencesSub","sentencesFilter","sentenceList",
@@ -555,6 +668,9 @@
     }
     state.entries.push(e);
     currentId = e.id; activeThreadId = null;
+    if (e.kind === "transcription" && Array.isArray(e.passages) && e.passages.length) {
+      loadPassageIntoTopLevel(e, e.passages[0].id);
+    } else currentPassageId = null;
     touchEntry(e); rememberOpen();
     if (parseHash().name !== "daily") location.hash = "#daily";
     else { showDaily(); renderRecentList(); }
@@ -603,8 +719,17 @@
   function openEntry(id) {
     if (id === currentId && parseHash().name === "daily") return;
     captureInterpCorrection();
+    // flush current entry's active passage before switching
+    const prev = currentEntry();
+    if (prev) syncTopLevelToPassage(prev);
     if (!findEntry(id)) return;
-    currentId = id; activeThreadId = null; editing = false; rememberOpen();
+    currentId = id; activeThreadId = null; editing = false;
+    currentPassageId = null;
+    const ne = currentEntry();
+    if (ne && ne.kind === "transcription" && Array.isArray(ne.passages) && ne.passages.length) {
+      loadPassageIntoTopLevel(ne, ne.passages[0].id);
+    }
+    rememberOpen();
     if (parseHash().name !== "daily") location.hash = "#daily";
     else { showDaily(); renderRecentList(); }
     autoCloseSidebarIfNarrow();
@@ -622,19 +747,6 @@
     scheduleSync(); cacheLocal();
     renderRecentList(); showDaily(); renderSidebarCounts();
     toast(`${kindLabel}을 삭제했습니다`);
-  }
-  function addParagraphToCurrent() {
-    const e = currentEntry();
-    if (!e || e.kind === "reflection") return;
-    let body = e.body || "";
-    // ensure body ends with a paragraph break before the new spot
-    if (body && !/\n\n$/.test(body)) body = body.replace(/\s*$/, "") + "\n\n";
-    e.body = body;
-    touchEntry(e);
-    enterEdit(body.length);
-    setTimeout(() => {
-      try { D.bodyField.scrollIntoView({ behavior: "smooth", block: "end" }); } catch (_) {}
-    }, 30);
   }
 
   // author/title autocomplete pools — populated from every prior entry
@@ -662,6 +774,13 @@
 
   function renderEntry() {
     const e = currentEntry(); if (!e) return;
+    // make sure passages exist + an active passage is loaded into top-level
+    if (e.kind === "transcription") {
+      if (!Array.isArray(e.passages) || !e.passages.length) e.passages = [blankPassage()];
+      if (!currentPassageId || !e.passages.some((p) => p.id === currentPassageId)) {
+        loadPassageIntoTopLevel(e, e.passages[0].id);
+      }
+    }
     D.entryDate.value = e.date;
     D.entryWeekday.textContent = weekdayOf(e.date) ? "· " + weekdayOf(e.date) : "";
     D.entryStatus.textContent = ""; D.entryStatus.classList.remove("show");
@@ -682,6 +801,39 @@
     D.claudeInput.value = ""; autoGrow(D.claudeInput, 160);
     D.claudeWarn.hidden = true;
     D.claudePanel.classList.remove("open"); D.claudeBody.hidden = true;
+    // static cards for other passages
+    renderPassageCards();
+  }
+  function renderPassageCards() {
+    const e = currentEntry();
+    if (!D.passagesBefore || !D.passagesAfter) return;
+    if (!e || e.kind !== "transcription" || !Array.isArray(e.passages) || e.passages.length <= 1) {
+      D.passagesBefore.innerHTML = ""; D.passagesAfter.innerHTML = "";
+      return;
+    }
+    const activeIdx = e.passages.findIndex((p) => p.id === currentPassageId);
+    const beforeHtml = e.passages.slice(0, Math.max(activeIdx, 0)).map((p, i) => buildPassageCard(p, i + 1)).join("");
+    const afterHtml  = e.passages.slice(activeIdx + 1).map((p, i) => buildPassageCard(p, activeIdx + 2 + i)).join("");
+    D.passagesBefore.innerHTML = beforeHtml;
+    D.passagesAfter.innerHTML  = afterHtml;
+  }
+  function buildPassageCard(p, displayNum) {
+    const bodyText = (p.body || "").trim();
+    const interpText = (p.interpretation || "").trim();
+    const threadCount = Array.isArray(p.threads) ? p.threads.length : 0;
+    const msgCount = Array.isArray(p.threads) ? p.threads.reduce((a, t) => a + (t.messages ? t.messages.length : 0), 0) : 0;
+    const hlCount = Array.isArray(p.highlights) ? p.highlights.length : 0;
+    const isLong = bodyText.length > 320;
+    return `<div class="passage-card" data-pass="${escAttr(p.id)}" role="button" tabindex="0" title="이 문단으로 전환">
+      <div class="passage-card-h">
+        <span class="passage-card-num">문단 ${displayNum}</span>
+        <span class="passage-card-meta">${hlCount ? `🖍 ${hlCount} ` : ""}${threadCount ? `△ ${msgCount}` : ""}</span>
+      </div>
+      <div class="passage-card-body${isLong ? "" : " tall"}">${bodyText ? esc(bodyText) : '<i style="opacity:.5">(빈 본문)</i>'}</div>
+      ${interpText ? `<div class="passage-card-interp">${esc(interpText)}</div>` : ""}
+      ${threadCount ? `<div class="passage-card-claude">△ Claude 대화 · ${threadCount}개 · ${msgCount}개 메시지</div>` : ""}
+      <button class="passage-card-del" data-passdel="${escAttr(p.id)}" title="이 문단 삭제">× 삭제</button>
+    </div>`;
   }
 
   /* ── reflection (사유) entry ── */
@@ -2053,6 +2205,7 @@
       for (const e of state.entries) dirtyEntries.add(e.id);
       dirtyAppState = true;
       currentId = (orderedEntries()[0] || {}).id || null;
+      currentPassageId = null;
       cacheLocal(); scheduleSync();
       renderRecentList(); renderSidebarCounts(); renderRoute();
       toast(`${n}개의 필사를 가져왔습니다`);
@@ -2094,7 +2247,24 @@
 
     // entry header
     D.deleteEntryBtn.addEventListener("click", deleteCurrentEntry);
-    D.addParagraphBtn.addEventListener("click", addParagraphToCurrent);
+    D.addParagraphBtn.addEventListener("click", addPassageToCurrent);
+
+    // passage card clicks (before / after the active editor)
+    const onPassagesClick = (ev) => {
+      const del = ev.target.closest("[data-passdel]");
+      if (del) { ev.stopPropagation(); deletePassage(del.dataset.passdel); return; }
+      const card = ev.target.closest(".passage-card");
+      if (card) { switchActivePassage(card.dataset.pass); }
+    };
+    D.passagesBefore.addEventListener("click", onPassagesClick);
+    D.passagesAfter.addEventListener("click", onPassagesClick);
+    const onPassagesKey = (ev) => {
+      const card = ev.target.closest(".passage-card");
+      if (!card) return;
+      if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); switchActivePassage(card.dataset.pass); }
+    };
+    D.passagesBefore.addEventListener("keydown", onPassagesKey);
+    D.passagesAfter.addEventListener("keydown", onPassagesKey);
     D.entryDate.addEventListener("change", () => {
       const e = currentEntry(); if (!e) return;
       const v = D.entryDate.value; if (!v) { D.entryDate.value = e.date; return; }
