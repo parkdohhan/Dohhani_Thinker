@@ -450,7 +450,7 @@
       "wordsCount","sentencesCount","recentList","exportBtn","importBtn","signOutBtn","importInput","sidebarReopen","main",
       "emptyState","emptyNewBtn","entryView","entryDate","entryWeekday","entryStatus","deleteEntryBtn","srcAuthor","srcTitle","srcPage",
       "bodyField","bodyRender","bodyEditWrap","bodyBackdrop","bodyInput","hlToolbar","slashMenu","slashMenuList","bodyHint","interpInput","interpSend","interpRevisions",
-      "claudePanel","claudeHead","claudeTitle","claudeChevron","claudeBody","threadList","claudeCompose","claudeInput","claudeSend","claudeWarn",
+      "claudePanel","claudeHead","claudeTitle","claudeChevron","claudeBody","threadList","claudeCompose","claudeInput","claudeSend","claudeWarn","addParagraphBtn",
       "reflectView","reflectDate","reflectWeekday","reflectStatus","reflectDeleteBtn","reflectAuthor","reflectTitle",
       "reflectModes","reflectModeDesc","reflectRevCount","reflectBlocks","reflectAddBlock",
       "wordsView","wordsSub","wordsFilter","wordsSort","wordsGrid","sentencesView","sentencesSub","sentencesFilter","sentenceList",
@@ -459,6 +459,7 @@
       "projectDetailView","projectBackBtn","projectCuratorEditBtn","projectArtScroll",
       "searchScrim","searchInput","searchClose","searchFilters","chipColor","chipClaude","chipFrom","chipTo","chipAuthor","searchResults",
       "modalScrim","modalClose","modalTitle","modalBody","modalActions","wordTip","toast",
+      "authorList","titleList",
     ].forEach((id) => (D[id] = $(id)));
   }
 
@@ -622,6 +623,36 @@
     renderRecentList(); showDaily(); renderSidebarCounts();
     toast(`${kindLabel}을 삭제했습니다`);
   }
+  function addParagraphToCurrent() {
+    const e = currentEntry();
+    if (!e || e.kind === "reflection") return;
+    let body = e.body || "";
+    // ensure body ends with a paragraph break before the new spot
+    if (body && !/\n\n$/.test(body)) body = body.replace(/\s*$/, "") + "\n\n";
+    e.body = body;
+    touchEntry(e);
+    enterEdit(body.length);
+    setTimeout(() => {
+      try { D.bodyField.scrollIntoView({ behavior: "smooth", block: "end" }); } catch (_) {}
+    }, 30);
+  }
+
+  // author/title autocomplete pools — populated from every prior entry
+  function refreshSourceDatalists() {
+    if (!D.authorList || !D.titleList) return;
+    const authors = new Set(), titles = new Set();
+    for (const e of state.entries) {
+      const a = (e.source && e.source.author) || "";
+      const t = (e.source && e.source.title) || "";
+      if (a.trim()) authors.add(a.trim());
+      if (t.trim()) titles.add(t.trim());
+    }
+    const aSorted = [...authors].sort((a, b) => a.localeCompare(b, "ko"));
+    const tSorted = [...titles].sort((a, b) => a.localeCompare(b, "ko"));
+    D.authorList.innerHTML = aSorted.map((v) => `<option value="${escAttr(v)}"></option>`).join("");
+    D.titleList.innerHTML  = tSorted.map((v) => `<option value="${escAttr(v)}"></option>`).join("");
+  }
+
   function srcLabel(e) {
     const p = [e.source.author, e.source.title].filter(Boolean);
     let s = p.join(" · ");
@@ -1749,9 +1780,9 @@
     wrap.innerHTML = `
       <div class="new-project-fields">
         <span class="new-project-label">저자</span>
-        <input class="new-project-input" id="npAuthor" placeholder="예: 톨스토이" autocomplete="off" />
+        <input class="new-project-input" id="npAuthor" placeholder="예: 톨스토이" autocomplete="off" list="authorList" />
         <span class="new-project-label" style="margin-top:4px;">작품 · 주제</span>
-        <input class="new-project-input" id="npTitle" placeholder="예: 예술이란 무엇인가" autocomplete="off" />
+        <input class="new-project-input" id="npTitle" placeholder="예: 예술이란 무엇인가" autocomplete="off" list="titleList" />
       </div>
       <div class="new-project-label" style="margin-top:6px;">첫 문서</div>
       <div class="new-project-pickers">
@@ -1779,6 +1810,7 @@
       newEntry(card.dataset.kind, { author, title });
     });
     openModal("새 프로젝트", wrap);
+    refreshSourceDatalists();
     setTimeout(() => { try { wrap.querySelector("#npAuthor").focus(); } catch (_) {} }, 0);
   }
 
@@ -1981,10 +2013,12 @@
     state = newVault();
     loadCache();
     rebuildTermIndex();
+    refreshSourceDatalists();
     renderRecentList(); renderSidebarCounts();
     renderRoute();
     applySidebar();
     await pullAll();
+    refreshSourceDatalists();
     renderRecentList(); renderSidebarCounts();
     // re-render whatever view is active
     renderRoute();
@@ -2060,13 +2094,14 @@
 
     // entry header
     D.deleteEntryBtn.addEventListener("click", deleteCurrentEntry);
+    D.addParagraphBtn.addEventListener("click", addParagraphToCurrent);
     D.entryDate.addEventListener("change", () => {
       const e = currentEntry(); if (!e) return;
       const v = D.entryDate.value; if (!v) { D.entryDate.value = e.date; return; }
       e.date = v; D.entryWeekday.textContent = weekdayOf(v) ? "· " + weekdayOf(v) : "";
       touchEntry(e); renderRecentList();
     });
-    const onSrc = (k, el) => { const e = currentEntry(); if (!e) return; e.source[k] = el.value; touchEntry(e); renderRecentList(); };
+    const onSrc = (k, el) => { const e = currentEntry(); if (!e) return; e.source[k] = el.value; touchEntry(e); renderRecentList(); refreshSourceDatalists(); };
     D.srcAuthor.addEventListener("input", () => onSrc("author", D.srcAuthor));
     D.srcTitle.addEventListener("input", () => onSrc("title", D.srcTitle));
     D.srcPage.addEventListener("input", () => onSrc("page", D.srcPage));
@@ -2079,8 +2114,8 @@
       e.date = v; D.reflectWeekday.textContent = weekdayOf(v) ? "· " + weekdayOf(v) : "";
       touchEntry(e); renderRecentList();
     });
-    D.reflectAuthor.addEventListener("input", () => { const e = currentEntry(); if (!e) return; e.source.author = D.reflectAuthor.value; touchEntry(e); renderRecentList(); });
-    D.reflectTitle.addEventListener("input", () => { const e = currentEntry(); if (!e) return; e.source.title = D.reflectTitle.value; touchEntry(e); renderRecentList(); });
+    D.reflectAuthor.addEventListener("input", () => { const e = currentEntry(); if (!e) return; e.source.author = D.reflectAuthor.value; touchEntry(e); renderRecentList(); refreshSourceDatalists(); });
+    D.reflectTitle.addEventListener("input", () => { const e = currentEntry(); if (!e) return; e.source.title = D.reflectTitle.value; touchEntry(e); renderRecentList(); refreshSourceDatalists(); });
 
     // chain blocks
     D.reflectBlocks.addEventListener("input", (ev) => {

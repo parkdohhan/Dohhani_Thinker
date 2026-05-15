@@ -113,9 +113,9 @@
           </button>
         </div>
         <div class="entry-source">
-          <input class="src src-author" id="srcAuthor" placeholder="저자" autocomplete="off" />
+          <input class="src src-author" id="srcAuthor" placeholder="저자" autocomplete="off" list="authorList" />
           <span class="src-dot">·</span>
-          <input class="src src-title" id="srcTitle" placeholder="작품 제목" autocomplete="off" />
+          <input class="src src-title" id="srcTitle" placeholder="작품 제목" autocomplete="off" list="titleList" />
           <span class="src-dot">·</span>
           <input class="src src-page" id="srcPage" placeholder="쪽" autocomplete="off" />
         </div>
@@ -179,6 +179,10 @@
           <div class="claude-warn" id="claudeWarn" hidden></div>
         </div>
       </section>
+
+      <button class="add-paragraph-btn" id="addParagraphBtn" type="button" title="이 문서에 새 문단 추가">
+        + 새 문단 추가
+      </button>
     </article>
 
     <!-- DAILY: REFLECTION ENTRY (사유) -->
@@ -193,9 +197,9 @@
           </button>
         </div>
         <div class="entry-source">
-          <input class="src src-author" id="reflectAuthor" placeholder="저자 · 선택" autocomplete="off" />
+          <input class="src src-author" id="reflectAuthor" placeholder="저자 · 선택" autocomplete="off" list="authorList" />
           <span class="src-dot">·</span>
-          <input class="src src-title" id="reflectTitle" placeholder="책 · 주제 · 맥락 (선택)" autocomplete="off" />
+          <input class="src src-title" id="reflectTitle" placeholder="책 · 주제 · 맥락 (선택)" autocomplete="off" list="titleList" />
         </div>
       </header>
 
@@ -335,6 +339,10 @@
     <div class="modal-actions" id="modalActions" hidden></div>
   </div>
 </div>
+
+<!-- author/title autocomplete pools (populated from your past entries) -->
+<datalist id="authorList"></datalist>
+<datalist id="titleList"></datalist>
 
 <!-- floating word tooltip -->
 <div class="word-tip" id="wordTip" hidden></div>
