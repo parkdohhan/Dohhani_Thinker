@@ -112,6 +112,9 @@
   let currentPassageId = null; // active passage in the open transcription entry
   let activeThreadId = null; // thread receiving compose messages
   let editing = false; // body edit mode
+  // > 0 while ANY AI request is in flight. pullAll must not swap state.entries
+  // out from under an in-flight call, or the response lands on an orphaned object.
+  let aiBusy = 0;
   let online = navigator.onLine;
   const dirtyEntries = new Set();
   const deletedEntries = new Set();
@@ -465,6 +468,8 @@
       ]);
       if (er.error) throw er.error;
       const remote = (er.data || []).map(rowToEntry);
+      // never swap entry objects out from under an in-flight AI call
+      if (aiBusy) { setSync("ok"); return; }
       // merge: per-id last-write-wins by updatedAt; push local-only & locally-newer
       const byId = new Map(state.entries.map((e) => [e.id, e]));
       const seen = new Set();
@@ -561,6 +566,7 @@
   let lastPullAt = 0;
   async function pullAndRefresh() {
     if (!user || document.hidden) return;
+    if (aiBusy) return; // never swap state.entries while an AI call is in flight
     if (Date.now() - lastPullAt < 2500) return;
     lastPullAt = Date.now();
     const sigBefore = state.entries.map((e) => e.id + ":" + e.updatedAt).sort().join("|");
@@ -970,6 +976,7 @@
     touchEntry(e);
     renderReflectBlocks();
 
+    aiBusy++;
     try {
       const { data: sess } = await sb.auth.getSession();
       const tok = sess && sess.session ? sess.session.access_token : null;
@@ -1019,6 +1026,8 @@
       touchEntry(e);
       renderReflectBlocks();
       toast("Claude 호출 실패 — " + (err.message || String(err)));
+    } finally {
+      aiBusy = Math.max(0, aiBusy - 1);
     }
   }
 
@@ -1556,7 +1565,7 @@
     opts = opts || {};
     const e = currentEntry(); if (!e) return;
     if (claudeBusy) return;
-    claudeBusy = true;
+    claudeBusy = true; aiBusy++;
     th.messages.push({ id: uid(), role: "user", content: userText, timestamp: nowISO() });
     const pending = { id: uid(), role: "assistant", content: "", pending: true, timestamp: nowISO() };
     th.messages.push(pending);
@@ -1588,7 +1597,7 @@
       showClaudeWarn("Claude 호출 실패 — " + (err.message || String(err)));
     }
     D.claudeSend.disabled = false;
-    claudeBusy = false;
+    claudeBusy = false; aiBusy = Math.max(0, aiBusy - 1);
     th.updatedAt = nowISO();
     touchEntry(e);
     if (opts.extract && !editing) renderBodyRead();
