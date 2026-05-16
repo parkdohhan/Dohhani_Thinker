@@ -245,37 +245,9 @@ a { color: inherit; }
 .body-render {
   color: var(--color-text-primary); min-height: calc(var(--body-size) * var(--body-leading) * 3);
   cursor: text; outline: none;
-  white-space: normal; /* lines below render as block divs; \n no longer renders inline */
 }
-.body-render:empty::before { content: "여기에 영어 원문을 손으로 옮겨 적습니다. ‘/’로 블록(제목 · 인용 · 구분선) 추가"; color: var(--color-text-tertiary); }
+.body-render:empty::before { content: "여기에 영어 원문을 손으로 옮겨 적습니다."; color: var(--color-text-tertiary); }
 .body-render mark, .art-text mark { color: inherit; }
-
-/* line-aware blocks (read mode) */
-.body-render .line, .art-text .line { display: block; }
-.body-render .line + .line { /* default spacing from line-height */ }
-.body-render .line-h1, .art-text .line-h1 {
-  font-size: 1.5em; font-weight: 600; line-height: 1.35;
-  margin-top: 0.85em; margin-bottom: 0.05em;
-}
-.body-render .line-h2, .art-text .line-h2 {
-  font-size: 1.18em; font-weight: 600; line-height: 1.4;
-  margin-top: 0.65em; margin-bottom: 0.05em;
-}
-.body-render .line-quote, .art-text .line-quote {
-  font-style: italic; color: var(--color-text-secondary);
-  border-left: 2px solid var(--color-border-secondary);
-  padding-left: 12px; margin: 0.25em 0;
-}
-.body-render .line-divider, .art-text .line-divider {
-  padding: 0.55em 0; text-align: center;
-}
-.body-render .line-divider hr, .art-text .line-divider hr {
-  display: inline-block; border: none;
-  border-top: 0.5px solid var(--color-border-secondary);
-  width: 28%; vertical-align: middle;
-}
-/* very light visual cue for the markdown prefix in read mode */
-.body-render .md-mark, .art-text .md-mark { color: var(--color-text-tertiary); opacity: 0.55; }
 .hl-yellow { background: var(--color-background-warning); color: var(--color-text-warning); padding: 0 3px; border-radius: 2px; }
 .hl-blue { background: var(--color-background-info); color: var(--color-text-info); padding: 0 3px; border-radius: 2px; }
 .term-mark { border-bottom: 1px dotted currentColor; cursor: help; }

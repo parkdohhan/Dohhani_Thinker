@@ -500,8 +500,11 @@
   let syncBusy = false, syncAgain = false;
   async function flushSyncNow() {
     if (!user) return;
-    if (!online) { setSync("offline"); return; }
+    if (!dirtyEntries.size && !dirtyAppState && !deletedEntries.size) { setSync("ok"); return; }
     if (syncBusy) { syncAgain = true; return; }
+    // NOTE: we deliberately do NOT gate on navigator.onLine — it gives false
+    // negatives that silently block all uploads. Just try; failures are caught
+    // and the entry stays dirty for the next retry.
     syncBusy = true;
     setSync("syncing");
     try {
@@ -542,7 +545,7 @@
   async function beaconFlush() {
     // best-effort save on the way out
     cacheLocal();
-    if (!user || !online || (!dirtyEntries.size && !dirtyAppState && !deletedEntries.size)) return;
+    if (!user || (!dirtyEntries.size && !dirtyAppState && !deletedEntries.size)) return;
     try {
       const { data: sess } = await sb.auth.getSession();
       const tok = sess && sess.session ? sess.session.access_token : null;
@@ -552,6 +555,26 @@
       if (rows.length) fetch(`${SUPABASE_URL}/rest/v1/entries?on_conflict=id`, { method: "POST", headers, body: JSON.stringify(rows), keepalive: true });
       if (dirtyAppState) fetch(`${SUPABASE_URL}/rest/v1/app_state?on_conflict=user_id`, { method: "POST", headers, body: JSON.stringify([{ user_id: user.id, terms: state.terms, settings: state.settings, updated_at: nowISO() }]), keepalive: true });
     } catch (_) {}
+  }
+  // re-pull from the cloud when the tab regains focus, so a second device
+  // picks up what was written elsewhere. Skips the re-render while you're typing.
+  let lastPullAt = 0;
+  async function pullAndRefresh() {
+    if (!user || document.hidden) return;
+    if (Date.now() - lastPullAt < 2500) return;
+    lastPullAt = Date.now();
+    const sigBefore = state.entries.map((e) => e.id + ":" + e.updatedAt).sort().join("|");
+    await pullAll();
+    const sigAfter = state.entries.map((e) => e.id + ":" + e.updatedAt).sort().join("|");
+    if (sigBefore === sigAfter) return; // nothing changed remotely
+    refreshSourceDatalists();
+    renderRecentList();
+    renderSidebarCounts();
+    const ae = document.activeElement;
+    const typing = editing || (ae && /^(TEXTAREA|INPUT)$/.test(ae.tagName || ""));
+    if (typing) { toast("다른 기기의 변경을 받았습니다 — 편집을 마치면 보입니다"); return; }
+    if (!currentEntry() && currentId) currentId = (orderedEntries()[0] || {}).id || null;
+    renderRoute();
   }
 
   /* ─────────────────────── DOM REFS ─────────────────────── */
@@ -1030,28 +1053,21 @@
   // Line-aware rendering: each text line becomes its own <div class="line line-…">.
   // Block kinds are detected by line prefixes (`# `, `## `, `> `) or a divider pattern.
   // Highlights are split at `\n` boundaries so marks never cross line divs.
+  // Flat renderer: one continuous string with \n preserved by `white-space: pre-wrap`.
+  // Keeping it flat means #bodyRender's text content === e.body exactly (thread-anchor
+  // <sup>s are empty, their △ comes from CSS), so drag-select offsets map cleanly.
   function buildBodyHtml(e, opts) {
     opts = opts || {};
     const text = e.body;
     if (!text) return "";
-    const splitHls = [];
-    for (const h of (e.highlights || [])) {
-      if (!(h.endChar > h.startChar)) continue;
-      let s = clamp(h.startChar, 0, text.length);
-      const e2 = clamp(h.endChar, 0, text.length);
-      while (s < e2) {
-        const nl = text.indexOf("\n", s);
-        const segEnd = nl === -1 || nl >= e2 ? e2 : nl;
-        if (segEnd > s) splitHls.push({ ...h, startChar: s, endChar: segEnd });
-        if (nl === -1 || nl >= e2) break;
-        s = nl + 1;
-      }
-    }
-    splitHls.sort((a, b) => a.startChar - b.startChar);
-    const cleanHls = []; let lastEnd = -1;
-    for (const h of splitHls) { if (h.startChar >= lastEnd) { cleanHls.push(h); lastEnd = h.endChar; } }
+    const hls = [...(e.highlights || [])]
+      .map((h) => ({ ...h, startChar: clamp(h.startChar, 0, text.length), endChar: clamp(h.endChar, 0, text.length) }))
+      .filter((h) => h.endChar > h.startChar)
+      .sort((a, b) => a.startChar - b.startChar);
+    const clean = []; let last = -1;
+    for (const h of hls) { if (h.startChar >= last) { clean.push(h); last = h.endChar; } }
     const events = [];
-    for (const h of cleanHls) {
+    for (const h of clean) {
       events.push({ pos: h.startChar, k: 2, hl: h });
       events.push({ pos: h.endChar,   k: 0, hl: h });
     }
@@ -1059,43 +1075,18 @@
       if (Number.isFinite(t.anchorChar)) events.push({ pos: clamp(t.anchorChar, 0, text.length), k: 1, thread: t });
     }
     events.sort((a, b) => a.pos - b.pos || a.k - b.k);
-
-    const lines = text.split("\n");
-    let html = "", evIdx = 0, charPos = 0;
-    for (let li = 0; li < lines.length; li++) {
-      const L = lines[li];
-      const lineStart = charPos;
-      const lineEnd   = charPos + L.length;
-      const trimmed = L.trim();
-      let cls = "line line-para", isDivider = false;
-      if (/^# /.test(L))        cls = "line line-h1";
-      else if (/^## /.test(L))  cls = "line line-h2";
-      else if (/^> /.test(L))   cls = "line line-quote";
-      else if (trimmed && /^(?:·\s*){2,}·?\s*$|^[─—\-]{3,}\s*$/.test(trimmed)) { cls = "line line-divider"; isDivider = true; }
-      if (isDivider) {
-        while (evIdx < events.length && events[evIdx].pos <= lineEnd) evIdx++;
-        html += `<div class="${cls}" aria-hidden="true"><hr></div>`;
-        charPos = lineEnd + 1;
-        continue;
-      }
-      let lineHtml = "", cur = lineStart, inHl = null;
-      while (evIdx < events.length && events[evIdx].pos <= lineEnd) {
-        const x = events[evIdx];
-        const seg = text.slice(cur, x.pos);
-        lineHtml += inHl ? esc(seg) : termWrap(seg);
-        cur = x.pos;
-        if (x.k === 2)      { inHl = x.hl; lineHtml += `<mark${markAttrs(x.hl, e)}>`; }
-        else if (x.k === 0) { lineHtml += "</mark>"; inHl = null; }
-        else if (x.k === 1) { lineHtml += `<sup class="thread-anchor" data-thread="${escAttr(x.thread.id)}" title="Claude 대화"></sup>`; }
-        evIdx++;
-      }
-      const tail = text.slice(cur, lineEnd);
-      lineHtml += inHl ? esc(tail) : termWrap(tail);
-      if (inHl) { lineHtml += "</mark>"; inHl = null; }
-      if (!lineHtml) lineHtml = "&#8203;"; // keep empty lines tall enough
-      html += `<div class="${cls}">${lineHtml}</div>`;
-      charPos = lineEnd + 1;
+    let html = "", cur = 0, inHl = null;
+    for (const x of events) {
+      const seg = text.slice(cur, x.pos);
+      html += inHl ? esc(seg) : termWrap(seg);
+      cur = x.pos;
+      if (x.k === 2)      { inHl = x.hl; html += `<mark${markAttrs(x.hl, e)}>`; }
+      else if (x.k === 0) { html += "</mark>"; inHl = null; }
+      else if (x.k === 1) { html += `<sup class="thread-anchor" data-thread="${escAttr(x.thread.id)}" title="Claude 대화"></sup>`; }
     }
+    const tail = text.slice(cur);
+    html += inHl ? esc(tail) : termWrap(tail);
+    if (inHl) html += "</mark>";
     return html;
   }
   function renderBodyRead() {
@@ -2321,10 +2312,33 @@
     });
 
     // body: read mode
-    D.bodyRender.addEventListener("click", (ev) => {
+    // handled on mouseup so a drag-select in read mode enters edit mode AND
+    // shows the 단어/구절/묻기 toolbar in one motion (no need to drag twice)
+    D.bodyRender.addEventListener("mouseup", (ev) => {
+      if (editing) return;
       const anchor = ev.target.closest(".thread-anchor");
       if (anchor) { ev.stopPropagation(); jumpToThread(anchor.dataset.thread); return; }
-      // click to edit at offset
+      // did the user drag-select some text?
+      let selRange = null;
+      try {
+        const sel = window.getSelection();
+        if (sel && sel.rangeCount && !sel.isCollapsed) {
+          const r = sel.getRangeAt(0);
+          if (D.bodyRender.contains(r.startContainer) && D.bodyRender.contains(r.endContainer)) selRange = r;
+        }
+      } catch (_) {}
+      if (selRange) {
+        let s = charOffsetIn(D.bodyRender, selRange.startContainer, selRange.startOffset);
+        let e2 = charOffsetIn(D.bodyRender, selRange.endContainer, selRange.endOffset);
+        if (s > e2) { const t = s; s = e2; e2 = t; }
+        if (e2 > s) {
+          enterEdit(s);
+          try { D.bodyInput.focus(); D.bodyInput.setSelectionRange(s, e2); } catch (_) {}
+          onBodySelChange();
+          return;
+        }
+      }
+      // plain click → enter edit at the caret offset
       let off = null;
       try {
         let pos = null;
@@ -2506,10 +2520,20 @@
     });
     window.addEventListener("resize", () => { applySidebar(); if (!D.entryView.hidden) autoGrow(D.interpInput); autoGrow(D.claudeInput, 160); hideToolbar(); hideWordTip(); });
     window.addEventListener("hashchange", renderRoute);
-    window.addEventListener("online", () => { online = true; setSync("ok"); flushSyncNow(); });
-    window.addEventListener("offline", () => { online = false; setSync("offline"); });
+    window.addEventListener("online", () => { online = true; flushSyncNow(); pullAndRefresh(); });
+    window.addEventListener("offline", () => { online = false; });
+    window.addEventListener("focus", () => { flushSyncNow(); pullAndRefresh(); });
+    // periodic safety net: retry any pending uploads, and pick up remote changes
+    setInterval(() => {
+      if (!user || document.hidden) return;
+      if (dirtyEntries.size || dirtyAppState || deletedEntries.size) flushSyncNow();
+      else pullAndRefresh();
+    }, 20000);
     window.addEventListener("pagehide", () => { captureInterpCorrection(); beaconFlush(); });
-    document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") { captureInterpCorrection(); beaconFlush(); } });
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden") { captureInterpCorrection(); beaconFlush(); }
+      else { flushSyncNow(); pullAndRefresh(); }
+    });
 
     // auth state
     sb.auth.onAuthStateChange((event, session) => {
