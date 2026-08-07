@@ -383,8 +383,11 @@
 
   const findEntry = (id) => state.entries.find((e) => e.id === id) || null;
   const currentEntry = () => findEntry(currentId);
+  // 사유 was removed from the app. Existing reflection entries stay in `state.entries`
+  // so they keep syncing and keep appearing in JSON backups — they're just never shown.
+  const isShown = (e) => e && e.kind !== "reflection";
   function orderedEntries() {
-    return [...state.entries].sort((a, b) => b.date.localeCompare(a.date) || String(b.createdAt).localeCompare(String(a.createdAt)));
+    return state.entries.filter(isShown).sort((a, b) => b.date.localeCompare(a.date) || String(b.createdAt).localeCompare(String(a.createdAt)));
   }
   function entriesChrono() {
     return [...state.entries].sort((a, b) => a.date.localeCompare(b.date) || String(a.createdAt).localeCompare(String(b.createdAt)));
@@ -696,14 +699,11 @@
       "emptyState","emptyNewBtn","entryView","entryDate","entryWeekday","entryStatus","deleteEntryBtn","srcAuthor","srcTitle","srcPage",
       "bodyField","bodyRender","bodyEditWrap","bodyBackdrop","bodyInput","hlToolbar","slashMenu","slashMenuList","bodyHint","interpInput","interpSend","interpRevisions",
       "claudePanel","claudeHead","claudeTitle","claudeChevron","claudeBody","threadList","claudeCompose","claudeInput","claudeSend","claudeWarn","addParagraphBtn","passagesBefore","passagesAfter",
-      "reflectView","reflectDate","reflectWeekday","reflectStatus","reflectDeleteBtn","reflectAuthor","reflectTitle",
-      "reflectModes","reflectModeDesc","reflectRevCount","reflectBlocks","reflectAddBlock",
       "reverseView","revDate","revWeekday","revStageBadge","revDeleteBtn","revAuthor","revTitle","revPage",
       "revSetup","revSetupKo","revSetupTarget","revSetupSave","revSetupCancel",
       "revWrite","revKo","revAttemptH","revAttemptInput","revSubmit","revWriteMeta","revEditSetup","revPrior","revCompare",
       "patternsBtn","patternsCount","patternsView","patternsSub","patternsFilter","patternsStarFilter","patternsCats","patternList",
       "wordsView","wordsSub","wordsFilter","wordsSort","wordsGrid","sentencesView","sentencesSub","sentencesFilter","sentenceList",
-      "thoughtsBtn","thoughtsCount","thoughtsView","thoughtsSub","thoughtsFilter","thoughtList",
       "projectsBtn","projectsCount","projectsView","projectsSort","projectsFilter","projectsGrid","projectsKindFilter","projectsNewBtn",
       "projectDetailView","projectBackBtn","projectCuratorEditBtn","projectArtScroll",
       "searchScrim","searchInput","searchClose","searchFilters","chipColor","chipClaude","chipFrom","chipTo","chipAuthor","searchResults",
@@ -753,13 +753,12 @@
   function renderRoute() {
     if (!user) return;
     const { name } = parseHash();
-    [D.emptyState, D.entryView, D.reflectView, D.reverseView, D.wordsView, D.sentencesView, D.thoughtsView, D.patternsView, D.projectsView, D.projectDetailView].forEach((v) => (v.hidden = true));
+    [D.emptyState, D.entryView, D.reverseView, D.wordsView, D.sentencesView, D.patternsView, D.projectsView, D.projectDetailView].forEach((v) => (v.hidden = true));
     D.searchScrim.hidden = true;
-    [D.searchBtn, D.wordsBtn, D.sentencesBtn, D.thoughtsBtn, D.patternsBtn, D.projectsBtn].forEach((b) => b.classList.remove("is-on"));
+    [D.searchBtn, D.wordsBtn, D.sentencesBtn, D.patternsBtn, D.projectsBtn].forEach((b) => b.classList.remove("is-on"));
     if (name === "patterns") { D.patternsBtn.classList.add("is-on"); D.patternsView.hidden = false; renderPatternsView(); }
     else if (name === "words") { D.wordsBtn.classList.add("is-on"); D.wordsView.hidden = false; renderWordsView(); }
     else if (name === "sentences") { D.sentencesBtn.classList.add("is-on"); D.sentencesView.hidden = false; renderSentencesView(); }
-    else if (name === "thoughts") { D.thoughtsBtn.classList.add("is-on"); D.thoughtsView.hidden = false; renderThoughtsView(); }
     else if (name === "projects" || name === "art") {
       // legacy #art redirects to projects grid
       D.projectsBtn.classList.add("is-on");
@@ -772,24 +771,20 @@
   }
   function showDaily() {
     D.main.scrollTop = 0;
-    if (!state.entries.length) { D.emptyState.hidden = false; D.entryView.hidden = true; D.reflectView.hidden = true; D.reverseView.hidden = true; return; }
-    if (!currentEntry()) {
+    if (!orderedEntries().length) { D.emptyState.hidden = false; D.entryView.hidden = true; D.reverseView.hidden = true; return; }
+    if (!isShown(currentEntry())) {
       let openId = null;
       try { openId = localStorage.getItem(lastOpenKey()); } catch (_) {}
-      currentId = openId && findEntry(openId) ? openId : (orderedEntries()[0] || {}).id || null;
+      currentId = openId && isShown(findEntry(openId)) ? openId : (orderedEntries()[0] || {}).id || null;
     }
     const e = currentEntry();
     if (!e) { D.emptyState.hidden = false; return; }
     D.emptyState.hidden = true;
-    if (e.kind === "reflection") {
-      D.entryView.hidden = true; D.reverseView.hidden = true; D.reflectView.hidden = false;
-      clearReverseDom();
-      renderReflectEntry();
-    } else if (e.kind === "reverse") {
-      D.entryView.hidden = true; D.reflectView.hidden = true; D.reverseView.hidden = false;
+    if (e.kind === "reverse") {
+      D.entryView.hidden = true; D.reverseView.hidden = false;
       renderReverseEntry();
     } else {
-      D.reflectView.hidden = true; D.reverseView.hidden = true; D.entryView.hidden = false;
+      D.reverseView.hidden = true; D.entryView.hidden = false;
       clearReverseDom();
       renderEntry();
     }
@@ -829,12 +824,10 @@
     else if (presetSource && (presetSource.author || presetSource.title)) {
       setTimeout(() => {
         try {
-          if (kind === "reflection") { const ta = D.reflectBlocks.querySelector(".rb-user-input"); if (ta) ta.focus(); }
-          else D.bodyInput.focus();
+          D.bodyInput.focus();
         } catch (_) {}
       }, 0);
-    } else if (kind === "reflection") setTimeout(() => { try { D.reflectAuthor.focus(); } catch (_) {} }, 0);
-    else D.srcAuthor.focus();
+    } else D.srcAuthor.focus();
   }
   function openNewDocPicker() {
     const wrap = document.createElement("div");
@@ -844,11 +837,6 @@
         <span class="doc-picker-name">필사</span>
         <span class="doc-picker-desc">남의 글을 옮겨 적고 해석합니다.<br/>본문 · 하이라이트 · 한국어 해석 · △ 묻기.</span>
         <span class="doc-picker-kbd">⌘1</span>
-      </button>
-      <button type="button" class="doc-picker-card" data-kind="reflection">
-        <span class="doc-picker-name">사유</span>
-        <span class="doc-picker-desc">내 생각을 직접 적고 다듬습니다.<br/>영어·한국어 자유. Claude가 교정·지적해 줍니다.</span>
-        <span class="doc-picker-kbd">⌘2</span>
       </button>
       <button type="button" class="doc-picker-card" data-kind="reverse">
         <span class="doc-picker-name">역번역</span>
@@ -860,7 +848,7 @@
       const card = ev.target.closest(".doc-picker-card");
       if (card) pick(card.dataset.kind);
     });
-    const PICK_KEYS = { 1: "transcription", 2: "reflection", 3: "reverse" };
+    const PICK_KEYS = { 1: "transcription", 3: "reverse" };
     function onKey(ev) {
       if (D.modalScrim.hidden) { document.removeEventListener("keydown", onKey, true); return; }
       if ((ev.metaKey || ev.ctrlKey) && PICK_KEYS[ev.key]) {
@@ -990,172 +978,6 @@
       ${threadCount ? `<div class="passage-card-claude">△ Claude 대화 · ${threadCount}개 · ${msgCount}개 메시지</div>` : ""}
       <button class="passage-card-del" data-passdel="${escAttr(p.id)}" title="이 문단 삭제">× 삭제</button>
     </div>`;
-  }
-
-  /* ── reflection (사유) entry ── */
-  let reflectBusy = false;
-  function modeDesc(m) {
-    if (m === "expand") return "(곧) 교정 + 대안 표현 + 요지";
-    if (m === "deep") return "(곧) 교정 + 대안 + 요지 + 되묻는 질문";
-    return "문법·표현 교정과 한국어 설명";
-  }
-  function renderReflectEntry() {
-    const e = currentEntry(); if (!e || e.kind !== "reflection") return;
-    if (!e.reflection || typeof e.reflection !== "object" || !Array.isArray(e.reflection.blocks)) e.reflection = normReflection(e.reflection);
-    const r = e.reflection;
-
-    D.reflectDate.value = e.date;
-    D.reflectWeekday.textContent = weekdayOf(e.date) ? "· " + weekdayOf(e.date) : "";
-    D.reflectStatus.textContent = ""; D.reflectStatus.classList.remove("show");
-    D.reflectAuthor.value = e.source.author;
-    D.reflectTitle.value = e.source.title;
-
-    D.reflectModes.querySelectorAll(".reflect-mode").forEach((b) => b.classList.toggle("is-on", b.dataset.mode === r.mode));
-    D.reflectModeDesc.textContent = modeDesc(r.mode);
-
-    const sentCount = r.blocks.filter((b) => b.kind === "ai").length;
-    D.reflectRevCount.textContent = sentCount ? `${sentCount}회 보냄` : "";
-
-    renderReflectBlocks();
-  }
-  function renderReflectBlocks() {
-    const e = currentEntry(); if (!e || e.kind !== "reflection") return;
-    const r = e.reflection;
-    D.reflectBlocks.innerHTML = r.blocks.map((b) => b.kind === "user" ? renderUserBlock(b) : renderAiBlock(b)).join("");
-    // wire textareas (set values + autogrow)
-    D.reflectBlocks.querySelectorAll(".rb-user-input").forEach((ta) => {
-      const id = ta.getAttribute("data-block");
-      const b = r.blocks.find((x) => x.id === id);
-      if (b) ta.value = b.text;
-      autoGrow(ta);
-    });
-  }
-  function renderUserBlock(b) {
-    return `<div class="rb-block rb-user" data-block="${escAttr(b.id)}">
-      <textarea class="rb-user-input" data-block="${escAttr(b.id)}" spellcheck="false"
-        placeholder="여기에 한 문단을 적습니다. ⌘↵ 로 보내면 아래에 교정·답이 옵니다."></textarea>
-      <div class="rb-user-foot">
-        <button class="rb-send" type="button" data-send="${escAttr(b.id)}" title="Claude에게 보내기 (⌘↵)">
-          <span class="tri">△</span><span>Claude에게 보내기</span><kbd>⌘↵</kbd>
-        </button>
-        <button class="rb-delete" type="button" data-del="${escAttr(b.id)}" title="이 문단 삭제">삭제</button>
-      </div>
-    </div>`;
-  }
-  function renderAiBlock(b) {
-    const errs = (b.errors && b.errors.length)
-      ? `<ul class="rb-ai-errors">${b.errors.map((er) => `<li><span class="reflect-err-tag">${esc(er.tag)}</span><span class="reflect-err-detail">${esc(er.detail)}</span></li>`).join("")}</ul>`
-      : (b._pending ? "" : `<div style="font-size:12px;color:var(--color-text-tertiary);margin-bottom:8px;">— 지적할 것이 없습니다.</div>`);
-    const ts = b.timestamp ? fmtDate(b.timestamp) + " " + String(b.timestamp).slice(11, 16) : "";
-    const corrected = b._pending ? "…교정 중" : (b.corrected || "(교정본 없음)");
-    return `<div class="rb-block rb-ai${b._pending ? " pending" : ""}" data-block="${escAttr(b.id)}">
-      <div class="rb-ai-h">교정</div>
-      <div class="rb-ai-corrected">${esc(corrected)}</div>
-      ${errs}
-      <div class="rb-ai-foot">
-        <span class="rb-ai-ts">${esc(ts)}</span>
-        ${b._pending ? "" : `<button class="rb-delete" type="button" data-del="${escAttr(b.id)}" title="이 답변 삭제">삭제</button>`}
-      </div>
-    </div>`;
-  }
-  function reflectAddUserBlock(focus) {
-    const e = currentEntry(); if (!e || e.kind !== "reflection") return;
-    const r = e.reflection;
-    const nb = { id: uid(), kind: "user", text: "" };
-    r.blocks.push(nb);
-    touchEntry(e);
-    renderReflectBlocks();
-    if (focus) {
-      setTimeout(() => {
-        const ta = D.reflectBlocks.querySelector(`.rb-user-input[data-block="${nb.id}"]`);
-        if (ta) { ta.focus(); ta.scrollIntoView({ behavior: "smooth", block: "center" }); }
-      }, 20);
-    }
-    return nb.id;
-  }
-  function reflectDeleteBlock(id) {
-    const e = currentEntry(); if (!e || e.kind !== "reflection") return;
-    const r = e.reflection;
-    r.blocks = r.blocks.filter((b) => b.id !== id);
-    if (!r.blocks.length) r.blocks.push({ id: uid(), kind: "user", text: "" });
-    if (r.blocks[r.blocks.length - 1].kind !== "user") r.blocks.push({ id: uid(), kind: "user", text: "" });
-    touchEntry(e);
-    renderReflectBlocks();
-  }
-  async function sendReflectBlock(userBlockId) {
-    const e = currentEntry(); if (!e || e.kind !== "reflection") return;
-    const r = e.reflection;
-    const idx = r.blocks.findIndex((b) => b.id === userBlockId && b.kind === "user");
-    if (idx < 0) return;
-    const user = r.blocks[idx];
-    // pick up latest text from the live textarea (in case input event was missed)
-    const ta = D.reflectBlocks.querySelector(`.rb-user-input[data-block="${user.id}"]`);
-    if (ta) user.text = ta.value;
-    const text = (user.text || "").trim();
-    if (!text) { if (ta) ta.focus(); toast("먼저 문단을 적어 주세요"); return; }
-
-    // remove an existing AI block immediately after this user block (re-send replaces it)
-    if (idx + 1 < r.blocks.length && r.blocks[idx + 1].kind === "ai") r.blocks.splice(idx + 1, 1);
-
-    const mode = r.mode || "correct";
-    const pending = { id: uid(), kind: "ai", mode, input: text, corrected: "", errors: [], expressions: [], summary: "", questions: [], timestamp: nowISO(), _pending: true };
-    r.blocks.splice(idx + 1, 0, pending);
-    touchEntry(e);
-    renderReflectBlocks();
-
-    aiBusy++;
-    try {
-      const { data: sess } = await sb.auth.getSession();
-      const tok = sess && sess.session ? sess.session.access_token : null;
-      if (!tok) throw new Error("로그인이 필요합니다");
-      const priorContext = r.blocks.slice(0, idx).map((b) => b.kind === "user" ? `— 이전 문단: ${b.text}` : `— 이전 교정: ${b.corrected}`).join("\n");
-      const context = { author: e.source.author || "", title: e.source.title || "", body: priorContext || undefined };
-      const resp = await fetch(CLAUDE_FN, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", apikey: SUPABASE_KEY, Authorization: `Bearer ${tok}` },
-        body: JSON.stringify({ messages: [{ role: "user", content: text }], context, reflect: mode }),
-      });
-      const out = await resp.json().catch(() => ({}));
-      if (!resp.ok || out.error) throw new Error((out && out.error) ? out.error : `요청 실패 (${resp.status})`);
-      const rr = out.reflect || {};
-      Object.assign(pending, {
-        corrected: typeof rr.corrected === "string" ? rr.corrected : "",
-        errors: Array.isArray(rr.errors) ? rr.errors : [],
-        expressions: Array.isArray(rr.expressions) ? rr.expressions : [],
-        summary: typeof rr.summary === "string" ? rr.summary : "",
-        questions: Array.isArray(rr.questions) ? rr.questions : [],
-        timestamp: nowISO(),
-      });
-      delete pending._pending;
-      // auto-add a new empty user block right after and focus it
-      let nextId = null;
-      const aiIdx = r.blocks.findIndex((b) => b.id === pending.id);
-      if (aiIdx + 1 >= r.blocks.length || r.blocks[aiIdx + 1].kind !== "user" || r.blocks[aiIdx + 1].text.trim()) {
-        const nb = { id: uid(), kind: "user", text: "" };
-        r.blocks.splice(aiIdx + 1, 0, nb);
-        nextId = nb.id;
-      } else {
-        nextId = r.blocks[aiIdx + 1].id;
-      }
-      touchEntry(e);
-      const sentCount = r.blocks.filter((b) => b.kind === "ai").length;
-      D.reflectRevCount.textContent = sentCount ? `${sentCount}회 보냄` : "";
-      renderReflectBlocks();
-      toast("교정 완료");
-      setTimeout(() => {
-        const next = D.reflectBlocks.querySelector(`.rb-user-input[data-block="${nextId}"]`);
-        if (next) { next.focus(); next.scrollIntoView({ behavior: "smooth", block: "center" }); }
-      }, 30);
-    } catch (err) {
-      // drop the pending placeholder on failure
-      const ai = r.blocks.find((b) => b.id === pending.id);
-      if (ai && ai._pending) r.blocks = r.blocks.filter((b) => b.id !== pending.id);
-      touchEntry(e);
-      renderReflectBlocks();
-      toast("Claude 호출 실패 — " + (err.message || String(err)));
-    } finally {
-      aiBusy = Math.max(0, aiBusy - 1);
-    }
   }
 
   /* ─────────────────────── 역번역 (reverse translation) ─────────────────────── */
@@ -2186,17 +2008,16 @@
   }
   function renderSidebarCounts() {
     D.wordsCount.textContent = state.terms.length ? String(state.terms.length) : "";
-    let sc = 0, tc = 0;
+    let sc = 0;
     const projectKeys = new Set();
     for (const e of state.entries) {
+      if (e.kind === "reflection") continue;   // 사유는 더 이상 화면에 나오지 않습니다
       projectKeys.add(projectKey(e));
-      if (e.kind === "reflection") { tc++; continue; }
-      if (e.kind === "reverse") continue; // 역번역 doesn't feed 나의 문장
+      if (e.kind === "reverse") continue;      // 역번역 doesn't feed 나의 문장
       for (const t of e.threads) if (t.anchorText && t.messages.length) sc++;
     }
     const pc = Array.isArray(state.patterns) ? state.patterns.length : 0;
     D.sentencesCount.textContent = sc ? String(sc) : "";
-    D.thoughtsCount.textContent = tc ? String(tc) : "";
     D.patternsCount.textContent = pc ? String(pc) : "";
     D.projectsCount.textContent = projectKeys.size ? String(projectKeys.size) : "";
   }
@@ -2315,18 +2136,18 @@
   function getProjects() {
     const map = new Map();
     for (const e of state.entries) {
+      if (e.kind === "reflection") continue;
       const key = projectKey(e);
       let p = map.get(key);
       if (!p) {
         const [a, t] = key.split("|");
-        p = { key, author: a, title: t, entries: [], lastUpdated: 0, transcriptionCount: 0, reflectionCount: 0, reverseCount: 0 };
+        p = { key, author: a, title: t, entries: [], lastUpdated: 0, transcriptionCount: 0, reverseCount: 0 };
         map.set(key, p);
       }
       p.entries.push(e);
       const u = +new Date(e.updatedAt || e.createdAt || 0);
       if (u > p.lastUpdated) p.lastUpdated = u;
-      if (e.kind === "reflection") p.reflectionCount++;
-      else if (e.kind === "reverse") p.reverseCount++;
+      if (e.kind === "reverse") p.reverseCount++;
       else p.transcriptionCount++;
     }
     return Array.from(map.values());
@@ -2355,11 +2176,7 @@
       (+new Date(b.updatedAt || b.createdAt || 0)) - (+new Date(a.updatedAt || a.createdAt || 0)));
     for (const e of ordered) {
       let t;
-      if (e.kind === "reflection") {
-        const blocks = (e.reflection && Array.isArray(e.reflection.blocks)) ? e.reflection.blocks : [];
-        const lastUser = [...blocks].reverse().find((b) => b.kind === "user" && b.text && b.text.trim());
-        t = lastUser ? lastUser.text : (e.reflection && e.reflection.body) || "";
-      } else if (e.kind === "reverse") {
+      if (e.kind === "reverse") {
         t = (e.reverse && e.reverse.koSource) || "";   // never the target — that's the answer key
       } else t = e.body;
       if (t && t.trim()) return t.trim().slice(0, 220);
@@ -2374,7 +2191,6 @@
     const f = (projectsState.filter || "").trim().toLowerCase();
     let list = getProjects();
     if (projectsState.kind === "transcription") list = list.filter((p) => p.transcriptionCount > 0);
-    else if (projectsState.kind === "reflection") list = list.filter((p) => p.reflectionCount > 0);
     else if (projectsState.kind === "reverse") list = list.filter((p) => p.reverseCount > 0);
     if (f) list = list.filter((p) => projectTitle(p).toLowerCase().includes(f) || projectExcerpt(p).toLowerCase().includes(f));
     if (projectsState.sort === "name") list.sort((a, b) => projectTitle(a).localeCompare(projectTitle(b), "ko"));
@@ -2402,7 +2218,6 @@
         <div class="project-card-foot">
           <span>${total}개</span>
           ${p.transcriptionCount ? `<span class="dot-sep">·</span><span>필사 ${p.transcriptionCount}</span>` : ""}
-          ${p.reflectionCount ? `<span class="dot-sep">·</span><span>사유 ${p.reflectionCount}</span>` : ""}
           ${p.reverseCount ? `<span class="dot-sep">·</span><span>역번역 ${p.reverseCount}</span>` : ""}
           ${ago ? `<span class="dot-sep">·</span><span>${esc(ago)} 업데이트됨</span>` : ""}
         </div>
@@ -2423,13 +2238,12 @@
   function renderProjectArchive(p, to) {
     const unpub = new Set(state.settings.unpublishedIds || []);
     // 역번역 is a drill, not a piece of writing — it never enters the archive
-    const list = p.entries.filter((e) => e.kind !== "reverse").sort((a, b) =>
+    const list = p.entries.filter((e) => e.kind !== "reverse" && e.kind !== "reflection").sort((a, b) =>
       a.date.localeCompare(b.date) || String(a.createdAt).localeCompare(String(b.createdAt)));
     const title = projectTitle(p);
     const ago = humanAgo(p.lastUpdated);
     const meta = `${list.length}개` +
       (p.transcriptionCount ? ` · 필사 ${p.transcriptionCount}` : "") +
-      (p.reflectionCount ? ` · 사유 ${p.reflectionCount}` : "") +
       (p.reverseCount ? ` · 역번역 ${p.reverseCount} (아카이브 제외)` : "") +
       (ago ? ` · ${ago} 업데이트됨` : "");
     let html = `<div class="art-frontis">
@@ -2446,14 +2260,7 @@
       const isUn = unpub.has(e.id);
       const num = list.length <= 600 ? toRoman(idx + 1) : String(idx + 1);
       let body, interp = "", corr = "", threads = "";
-      if (e.kind === "reflection") {
-        const r = e.reflection || {};
-        const blocks = Array.isArray(r.blocks) ? r.blocks : [];
-        // surface only the writer's own paragraphs in art mode
-        const paras = blocks.filter((b) => b.kind === "user").map((b) => (b.text || "").trim()).filter(Boolean);
-        const text = paras.length ? paras.join("\n\n") : (r.body || "").trim();
-        body = text ? esc(text).replace(/\n/g, "<br/>") : "";
-      } else {
+      {
         body = buildArtBody(e);
         if (e.interpretation && e.interpretation.trim()) interp = `<div class="art-interp">${esc(e.interpretation)}</div>`;
         corr = (e.corrections || []).map((c) =>
@@ -2463,7 +2270,7 @@
           return `<div class="art-thread"><span class="tri">△</span> <span class="q">${esc(t.anchorText)}</span>${a ? ` — <span class="a">${esc(a.content)}</span>` : ""}</div>`;
         }).join("");
       }
-      const foot = `<div class="art-foot"><span class="fn-mark">—— </span>${esc([e.source.author, e.source.title].filter(Boolean).join(", "))}${e.source.page ? ", " + esc(pageRef(e.source.page)) : ""}${e.source.author || e.source.title ? ". " : ""}${esc(fmtDate(e.date))}${e.kind === "reflection" ? " · 사유" : ""}</div>`;
+      const foot = `<div class="art-foot"><span class="fn-mark">—— </span>${esc([e.source.author, e.source.title].filter(Boolean).join(", "))}${e.source.page ? ", " + esc(pageRef(e.source.page)) : ""}${e.source.author || e.source.title ? ". " : ""}${esc(fmtDate(e.date))}</div>`;
       html += `<section class="art-entry${isUn ? " is-unpublished" : ""}" data-art="${escAttr(e.id)}">
         <button class="art-pub-toggle" data-pub="${escAttr(e.id)}">${isUn ? "숨김 — 보이기" : "숨기기"}</button>
         <div class="art-entry-num">${esc(num)}${isUn ? " · 숨김" : ""}</div>
@@ -2493,10 +2300,6 @@
           <span class="doc-picker-name">필사</span>
           <span class="doc-picker-desc">남의 글을 옮겨 적고 해석합니다.</span>
         </button>
-        <button type="button" class="doc-picker-card" data-kind="reflection">
-          <span class="doc-picker-name">사유</span>
-          <span class="doc-picker-desc">내 생각을 직접 적고 다듬습니다.</span>
-        </button>
         <button type="button" class="doc-picker-card" data-kind="reverse">
           <span class="doc-picker-name">역번역</span>
           <span class="doc-picker-desc">내 한국어에서 영어를 다시 만듭니다.</span>
@@ -2519,62 +2322,6 @@
     openModal("새 프로젝트", wrap);
     refreshSourceDatalists();
     setTimeout(() => { try { wrap.querySelector("#npAuthor").focus(); } catch (_) {} }, 0);
-  }
-
-  /* ─────────────────────── 나의 생각 (사유 archive) ─────────────────────── */
-  let thoughtsState = { filter: "" };
-  function reflectionEntriesSorted() {
-    return state.entries
-      .filter((e) => e.kind === "reflection")
-      .sort((a, b) => b.date.localeCompare(a.date) || String(b.createdAt).localeCompare(String(a.createdAt)));
-  }
-  function renderThoughtsView() {
-    const list = reflectionEntriesSorted();
-    D.thoughtsSub.textContent = `${list.length}개의 사유 · 내가 적고 Claude가 다듬은 것들`;
-    D.thoughtsFilter.value = thoughtsState.filter;
-    const f = thoughtsState.filter.trim().toLowerCase();
-    const filtered = !f ? list : list.filter((e) => {
-      const r = e.reflection || {};
-      const blocks = Array.isArray(r.blocks) ? r.blocks : [];
-      const hay = [
-        srcLabel(e) || "",
-        ...blocks.flatMap((b) => b.kind === "user" ? [b.text || ""] : [b.corrected || "", (b.errors || []).map((er) => er.detail).join(" ")]),
-        r.body || "",
-      ].join("\n").toLowerCase();
-      return hay.includes(f);
-    });
-    if (!filtered.length) {
-      D.thoughtList.innerHTML = `<div class="thought-row-empty">${list.length ? "거른 결과가 없습니다." : "아직 사유가 없습니다. 사이드바 “새 문서” → 사유로 시작합니다."}</div>`;
-      return;
-    }
-    D.thoughtList.innerHTML = filtered.map((e) => {
-      const r = e.reflection || {};
-      const blocks = Array.isArray(r.blocks) ? r.blocks : [];
-      const userBlocks = blocks.filter((b) => b.kind === "user" && b.text && b.text.trim());
-      const aiBlocks = blocks.filter((b) => b.kind === "ai");
-      const lastUserText = userBlocks.length ? userBlocks[userBlocks.length - 1].text : (r.body || "");
-      const lastAi = aiBlocks.length ? aiBlocks[aiBlocks.length - 1] : null;
-      const body = lastUserText.trim();
-      const src = srcLabel(e);
-      const tagCounts = {};
-      if (lastAi && Array.isArray(lastAi.errors)) for (const er of lastAi.errors) tagCounts[er.tag] = (tagCounts[er.tag] || 0) + 1;
-      const tagPills = Object.entries(tagCounts)
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 4)
-        .map(([t, n]) => `<span class="reflect-err-tag">${esc(t)}·${n}</span>`).join(" ");
-      const rev = aiBlocks.length;
-      return `<button type="button" class="thought-row" data-open-entry="${escAttr(e.id)}">
-        <div class="thought-row-top">
-          <div class="thought-row-date">${esc(fmtDate(e.date))}</div>
-          <div class="thought-row-src">${esc(src || "—")}</div>
-        </div>
-        <div class="thought-row-body">${esc(body) || "<i style='opacity:.5'>(빈 본문)</i>"}</div>
-        <div class="thought-row-tags">
-          <span class="thought-row-revcount">${rev ? `교정 ${rev}회` : "아직 안 보냄"}</span>
-          ${tagPills}
-        </div>
-      </button>`;
-    }).join("");
   }
 
   /* ─────────────────────── 나의 패턴 (pattern note) ─────────────────────── */
@@ -2889,7 +2636,6 @@
     D.searchBtn.addEventListener("click", openSearch);
     D.wordsBtn.addEventListener("click", () => go("#words"));
     D.sentencesBtn.addEventListener("click", () => go("#sentences"));
-    D.thoughtsBtn.addEventListener("click", () => go("#thoughts"));
     D.patternsBtn.addEventListener("click", () => go("#patterns"));
     D.projectsBtn.addEventListener("click", () => go("#projects"));
     D.exportBtn.addEventListener("click", exportJSON);
@@ -2929,50 +2675,6 @@
     D.srcAuthor.addEventListener("input", () => onSrc("author", D.srcAuthor));
     D.srcTitle.addEventListener("input", () => onSrc("title", D.srcTitle));
     D.srcPage.addEventListener("input", () => onSrc("page", D.srcPage));
-
-    // reflection (사유) entry — header + body + mode + send
-    D.reflectDeleteBtn.addEventListener("click", deleteCurrentEntry);
-    D.reflectDate.addEventListener("change", () => {
-      const e = currentEntry(); if (!e) return;
-      const v = D.reflectDate.value; if (!v) { D.reflectDate.value = e.date; return; }
-      e.date = v; D.reflectWeekday.textContent = weekdayOf(v) ? "· " + weekdayOf(v) : "";
-      touchEntry(e); renderRecentList();
-    });
-    D.reflectAuthor.addEventListener("input", () => { const e = currentEntry(); if (!e) return; e.source.author = D.reflectAuthor.value; touchEntry(e); renderRecentList(); refreshSourceDatalists(); });
-    D.reflectTitle.addEventListener("input", () => { const e = currentEntry(); if (!e) return; e.source.title = D.reflectTitle.value; touchEntry(e); renderRecentList(); refreshSourceDatalists(); });
-
-    // chain blocks
-    D.reflectBlocks.addEventListener("input", (ev) => {
-      const ta = ev.target.closest(".rb-user-input"); if (!ta) return;
-      const e = currentEntry(); if (!e || e.kind !== "reflection") return;
-      const id = ta.dataset.block;
-      const b = e.reflection.blocks.find((x) => x.id === id);
-      if (b) { b.text = ta.value; touchEntry(e); autoGrow(ta); }
-    });
-    D.reflectBlocks.addEventListener("keydown", (ev) => {
-      if (!ev.target.matches(".rb-user-input")) return;
-      if ((ev.metaKey || ev.ctrlKey) && ev.key === "Enter") {
-        ev.preventDefault();
-        sendReflectBlock(ev.target.dataset.block);
-      }
-    });
-    D.reflectBlocks.addEventListener("click", (ev) => {
-      const send = ev.target.closest("[data-send]");
-      if (send) { sendReflectBlock(send.dataset.send); return; }
-      const del = ev.target.closest("[data-del]");
-      if (del) { reflectDeleteBlock(del.dataset.del); return; }
-    });
-    D.reflectAddBlock.addEventListener("click", () => reflectAddUserBlock(true));
-
-    D.reflectModes.addEventListener("click", (ev) => {
-      const b = ev.target.closest(".reflect-mode"); if (!b || b.disabled) return;
-      const e = currentEntry(); if (!e || e.kind !== "reflection") return;
-      if (!e.reflection || !Array.isArray(e.reflection.blocks)) e.reflection = normReflection(e.reflection);
-      e.reflection.mode = b.dataset.mode || "correct";
-      touchEntry(e);
-      D.reflectModes.querySelectorAll(".reflect-mode").forEach((x) => x.classList.toggle("is-on", x === b));
-      D.reflectModeDesc.textContent = modeDesc(e.reflection.mode);
-    });
 
     // 역번역 entry — header + setup + write + compare
     D.revDeleteBtn.addEventListener("click", deleteCurrentEntry);
@@ -3190,11 +2892,6 @@
 
     // sentences view
     D.sentencesFilter.addEventListener("input", () => { sentencesState.filter = D.sentencesFilter.value; renderSentencesView(); });
-    D.thoughtsFilter.addEventListener("input", () => { thoughtsState.filter = D.thoughtsFilter.value; renderThoughtsView(); });
-    D.thoughtList.addEventListener("click", (ev) => {
-      const row = ev.target.closest("[data-open-entry]");
-      if (row) { go("#daily"); openEntry(row.dataset.openEntry); }
-    });
 
     // projects — grid
     D.projectsFilter.addEventListener("input", () => { projectsState.filter = D.projectsFilter.value; renderProjectsView(); });
