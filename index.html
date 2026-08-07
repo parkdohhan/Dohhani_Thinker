@@ -7,6 +7,13 @@
 <meta name="description" content="필사 — a bilingual reading journal" />
 <link rel="stylesheet" href="styles.css" />
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script>
+  /* Some networks (office firewalls, ad blockers, a few Korean ISPs) block jsdelivr.
+     Without the library nothing works — not even the login form — so try a second
+     host before the app gives up. document.write is deliberate: it must run
+     synchronously during parsing so app.js still finds window.supabase. */
+  if (!window.supabase) document.write('<script src="https://unpkg.com/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"><\/script>');
+</script>
 </head>
 <body>
 

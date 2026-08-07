@@ -13,7 +13,11 @@
 
   if (!window.supabase || !window.supabase.createClient) {
     document.addEventListener("DOMContentLoaded", () => {
-      document.body.innerHTML = '<div style="max-width:420px;margin:18vh auto;font-family:sans-serif;color:#5b574e;text-align:center;line-height:1.7;">Supabase 라이브러리를 불러오지 못했습니다.<br/>네트워크 연결을 확인하고 새로고침해 주세요.</div>';
+      document.body.innerHTML = '<div style="max-width:420px;margin:14vh auto;padding:0 20px;font-family:sans-serif;color:#5b574e;text-align:center;line-height:1.8;">'
+        + '<b>로그인 모듈을 불러오지 못했습니다.</b><br/><br/>'
+        + '광고 차단기·회사 네트워크·VPN이 <code>cdn.jsdelivr.net</code> 과 <code>unpkg.com</code> 을 막고 있을 수 있습니다.<br/>'
+        + '차단을 잠시 끄거나 다른 네트워크(휴대폰 데이터 등)에서 새로고침해 주세요.'
+        + '</div>';
     });
     return;
   }
@@ -2762,10 +2766,24 @@
         if (error) throw error;
       }
     } catch (err) {
-      const m = (err && err.message) || String(err);
-      D.authMsg.textContent = /Invalid login/i.test(m) ? "이메일 또는 비밀번호가 올바르지 않습니다." : /already registered|already exists/i.test(m) ? "이미 가입된 이메일입니다 — 로그인해 주세요." : /Email not confirmed/i.test(m) ? "메일 인증이 아직 완료되지 않았습니다." : m;
+      D.authMsg.textContent = authErrorKo(err);
     }
     D.authSubmit.disabled = false;
+  }
+  // Supabase speaks English and only some of it is obvious. Anything we can name,
+  // we name in Korean; anything we can't, we show raw rather than swallow.
+  function authErrorKo(err) {
+    const code = (err && err.code) || "";
+    const m = (err && err.message) || String(err);
+    if (code === "weak_password" || /at least 6 characters|weak.?password/i.test(m)) return "비밀번호는 6자 이상이어야 합니다.";
+    if (code === "user_already_exists" || /already registered|already exists/i.test(m)) return "이미 가입된 이메일입니다 — 위의 “로그인”으로 들어가세요.";
+    if (code === "validation_failed" || /validate email address|invalid format/i.test(m)) return "이메일 주소 형식을 확인해 주세요.";
+    if (code === "signup_disabled" || /signups? not allowed|disabled/i.test(m)) return "지금은 회원가입이 닫혀 있습니다.";
+    if (code === "over_email_send_rate_limit" || code === "over_request_rate_limit" || /for security purposes|rate limit/i.test(m)) return "요청이 잦습니다 — 1분쯤 뒤에 다시 시도해 주세요.";
+    if (/invalid login/i.test(m)) return "이메일 또는 비밀번호가 올바르지 않습니다.";
+    if (/email not confirmed/i.test(m)) return "메일 인증이 아직 완료되지 않았습니다.";
+    if (/failed to fetch|networkerror|load failed/i.test(m)) return "서버에 연결하지 못했습니다. 네트워크를 확인하고 다시 시도해 주세요.";
+    return m;
   }
   async function signOut() {
     await beaconFlush();
