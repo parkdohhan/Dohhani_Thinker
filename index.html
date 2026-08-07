@@ -233,6 +233,9 @@
 
       <div class="entry-divider"></div>
 
+      <!-- earlier 문단 cards (koSource only — never another 문단's target) -->
+      <div class="passages-static" id="revPassBefore"></div>
+
       <!-- SETUP — the only place the target ever enters the DOM -->
       <section class="rev-setup" id="revSetup" hidden>
         <div class="rev-h">한국어 원문</div>
@@ -267,6 +270,17 @@
 
       <!-- STATE B — compare (rendered wholesale on submit, emptied on leave) -->
       <section class="rev-compare" id="revCompare" hidden></section>
+
+      <div class="passages-static" id="revPassAfter"></div>
+      <button class="add-paragraph-btn" id="revAddPassage" type="button" title="이 문서에 새 문단 추가">+ 새 문단 추가</button>
+
+      <!-- selection toolbar for the revealed target -->
+      <div class="hl-toolbar rev-hl-toolbar" id="revHlToolbar" hidden>
+        <button class="hl-btn hl-btn--yellow" data-type="yellow" title="모르는 단어"><span class="swatch"></span>단어</button>
+        <button class="hl-btn hl-btn--blue" data-type="blue" title="불분명한 구절"><span class="swatch"></span>구절</button>
+        <button class="hl-btn hl-btn--ask" data-type="ask" title="이 부분 Claude에게 묻기"><span class="tri">△</span>묻기</button>
+        <button class="hl-btn hl-btn--clear" data-type="clear" title="표시 지우기" hidden>지우기</button>
+      </div>
     </article>
 
     <!-- 나의 패턴 (reverse-translation pattern note) -->

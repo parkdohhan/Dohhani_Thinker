@@ -927,6 +927,106 @@ a { color: inherit; }
 .recent-stage.stage-done { color: var(--color-text-success); }
 .sr-kind { font-family: var(--font-korean); font-size: 10px; color: var(--color-text-tertiary); }
 
+/* ── 문단 카드 (필사·역번역 공용) ──
+   These were collateral damage when the 사유 block was cut out of this file —
+   .add-paragraph-btn shared a rule with the reflection block styles. */
+.add-paragraph-btn {
+  display: block; width: 100%; padding: 10px 12px;
+  font-size: 12.5px; color: var(--color-text-tertiary);
+  background: transparent; border: 0.5px dashed var(--color-border-tertiary);
+  border-radius: 6px; transition: background-color 0.15s, color 0.15s, border-color 0.15s;
+  font-family: var(--font-korean); letter-spacing: 0.04em; margin-top: 28px;
+}
+.add-paragraph-btn:hover {
+  color: var(--color-text-primary); border-color: var(--color-text-tertiary);
+  background: var(--color-background-secondary);
+}
+.passages-static { display: flex; flex-direction: column; gap: 22px; margin: 4px 0; }
+#passagesBefore:not(:empty), #revPassBefore:not(:empty) { margin-bottom: 28px; }
+#passagesAfter:not(:empty), #revPassAfter:not(:empty) { margin-top: 32px; padding-top: 22px; border-top: 0.5px dashed var(--color-border-tertiary); }
+.passage-card {
+  position: relative;
+  padding: 16px 18px; border-radius: 8px;
+  background: var(--color-background-secondary);
+  border: 0.5px solid var(--color-border-tertiary);
+  cursor: pointer; transition: border-color 0.15s, background-color 0.15s;
+}
+.passage-card:hover { border-color: var(--color-text-tertiary); }
+.passage-card-h {
+  font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase;
+  color: var(--color-text-tertiary); margin-bottom: 8px;
+  display: flex; align-items: center; gap: 8px;
+}
+.passage-card-num { font-family: var(--font-serif); font-style: italic; }
+.passage-card-meta { margin-left: auto; font-size: 10.5px; }
+.passage-card-body {
+  font-family: var(--font-serif); font-size: 14.5px; line-height: 1.7;
+  color: var(--color-text-primary);
+  max-height: 5.6em; overflow: hidden; position: relative;
+}
+.passage-card-body::after {
+  content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 1.8em;
+  background: linear-gradient(180deg, transparent, var(--color-background-secondary));
+  pointer-events: none;
+}
+.passage-card-body.tall { max-height: none; }
+.passage-card-body.tall::after { display: none; }
+.passage-card-interp {
+  margin-top: 10px; padding-left: 10px; border-left: 2px solid var(--color-border-tertiary);
+  font-family: var(--font-korean); font-style: italic; font-size: 13px; line-height: 1.7;
+  color: var(--color-text-secondary);
+  max-height: 4.5em; overflow: hidden; white-space: pre-wrap;
+}
+.passage-card-claude { margin-top: 10px; font-size: 11px; color: var(--color-text-tertiary); }
+.passage-card-del {
+  position: absolute; top: 10px; right: 10px;
+  font-size: 11px; color: var(--color-text-tertiary);
+  opacity: 0; transition: opacity 0.15s, color 0.15s;
+}
+.passage-card:hover .passage-card-del { opacity: 0.6; }
+.passage-card-del:hover { opacity: 1; color: #b03b2e; }
+.active-passage-num {
+  font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase;
+  color: var(--color-text-tertiary); margin-bottom: 10px;
+  font-family: var(--font-serif); font-style: italic;
+}
+
+/* 역번역: 문단 카드 · 목표 영문 표시 모드 · 해석 */
+.rev-pass-card .passage-card-body { font-family: var(--font-korean); font-size: 13.5px; }
+.rev-pass-card .passage-card-meta { display: flex; align-items: center; gap: 6px; }
+.rev-pass-card .rev-stage-badge { font-size: 9px; padding: 0 5px; }
+
+.rev-col-h { display: flex; align-items: center; gap: 8px; }
+.rev-col-seg { margin-left: auto; display: flex; border: 0.5px solid var(--color-border-tertiary); border-radius: 5px; overflow: hidden; }
+.rev-col-seg button {
+  font-family: var(--font-korean); font-size: 10px; letter-spacing: 0.02em; text-transform: none;
+  padding: 1px 8px; color: var(--color-text-tertiary); border-right: 0.5px solid var(--color-border-tertiary);
+}
+.rev-col-seg button:last-child { border-right: none; }
+.rev-col-seg button.is-on { background: var(--color-background-primary); color: var(--color-text-primary); }
+
+/* the revealed target, markable like a 필사 body */
+.rev-target-read { cursor: text; }
+.rev-target-read mark { background: none; }
+.rev-target-read .hl-yellow { background: var(--color-background-warning); border-radius: 2px; }
+.rev-target-read .hl-blue { background: var(--color-background-info); border-radius: 2px; }
+.rev-target-read .term-mark { border-bottom: 1px dotted var(--color-text-tertiary); }
+.rev-target-read .thread-anchor { color: var(--color-text-warning); cursor: pointer; }
+.rev-target-read .thread-anchor::after { content: "△"; font-size: 8px; vertical-align: super; }
+.rev-hl-toolbar { position: fixed; z-index: 40; }
+
+.rev-study { margin-top: 30px; border-top: 0.5px solid var(--color-border-tertiary); padding-top: 18px; }
+.rev-interp-input {
+  width: 100%; min-height: 92px; resize: vertical;
+  font-family: var(--font-korean); font-size: 14px; line-height: 1.8;
+  color: var(--color-text-primary); background: var(--color-background-primary);
+  border: 0.5px solid var(--color-border-secondary); border-radius: 4px;
+  padding: 13px 15px; outline: none;
+}
+.rev-interp-input:focus { border-color: var(--color-text-tertiary); }
+.rev-interp-input::placeholder { color: var(--color-text-tertiary); }
+.rev-threads { margin-top: 16px; display: flex; flex-direction: column; gap: 12px; }
+
 /* ════════════ 나의 패턴 ════════════ */
 .pat-cats { margin-top: 14px; display: flex; gap: 7px; flex-wrap: wrap; }
 .pat-cat {

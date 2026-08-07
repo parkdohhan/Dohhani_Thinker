@@ -157,7 +157,7 @@
     if (kind === "reflection") {
       base.reflection = { mode: "correct", blocks: [{ id: uid(), kind: "user", text: "" }] };
     } else if (kind === "reverse") {
-      base.reverse = { koSource: "", target: "", attempts: [], nextRevisit: null, stage: "new" };
+      base.reverse = { passages: [blankRevPassage()] };
     } else {
       const p0 = blankPassage();
       base.passages = [p0];
@@ -278,15 +278,37 @@
       analysis: normRevAnalysis(a.analysis),
     };
   }
+  // One 문단 of a 역번역 document: the drill (koSource/target/attempts) plus the
+  // 필사 study layer over the revealed target — highlights, a Korean reading, its
+  // correction history, and △ threads. Offsets are into `target`.
+  function normRevPassage(p) {
+    p = p && typeof p === "object" ? p : {};
+    return {
+      id: typeof p.id === "string" && p.id ? p.id : uid(),
+      koSource: typeof p.koSource === "string" ? p.koSource : "",
+      target: typeof p.target === "string" ? p.target : "",
+      attempts: Array.isArray(p.attempts) ? p.attempts.map(normRevAttempt) : [],
+      nextRevisit: typeof p.nextRevisit === "string" && p.nextRevisit ? p.nextRevisit.slice(0, 10) : null,
+      stage: REV_STAGES.includes(p.stage) ? p.stage : "new",
+      highlights: Array.isArray(p.highlights) ? p.highlights.filter((h) => h && h.endChar > h.startChar).map((h) => ({
+        id: h.id || uid(), startChar: h.startChar | 0, endChar: h.endChar | 0,
+        type: h.type === "blue" ? "blue" : "yellow", note: h.note || "",
+      })) : [],
+      interpretation: typeof p.interpretation === "string" ? p.interpretation : "",
+      corrections: Array.isArray(p.corrections) ? p.corrections.filter((c) => c && typeof c === "object").map((c) => ({
+        timestamp: c.timestamp || nowISO(), previousText: c.previousText || "", newText: c.newText || "",
+      })) : [],
+      threads: Array.isArray(p.threads) ? p.threads.map(normThread) : [],
+    };
+  }
+  function blankRevPassage() { return normRevPassage({}); }
   function normReverse(r) {
     r = r && typeof r === "object" ? r : {};
-    return {
-      koSource: typeof r.koSource === "string" ? r.koSource : "",
-      target: typeof r.target === "string" ? r.target : "",
-      attempts: Array.isArray(r.attempts) ? r.attempts.map(normRevAttempt) : [],
-      nextRevisit: typeof r.nextRevisit === "string" && r.nextRevisit ? r.nextRevisit.slice(0, 10) : null,
-      stage: REV_STAGES.includes(r.stage) ? r.stage : "new",
-    };
+    // legacy: a single flat drill on `reverse` itself → becomes 문단 1
+    const passages = (Array.isArray(r.passages) && r.passages.length)
+      ? r.passages.map(normRevPassage)
+      : [normRevPassage(r)];
+    return { passages };
   }
   function normPattern(p) {
     p = p && typeof p === "object" ? p : {};
@@ -482,13 +504,16 @@
   const wordRe = /[A-Za-z][A-Za-z'’-]*/g;
   function rebuildTermIndex() { termWords = new Set(state.terms.map((t) => t.word).filter(Boolean)); }
   function findTerm(w) { w = normWord(w); return state.terms.find((t) => t.word === w) || null; }
-  function upsertEncounter(entry, hl) {
-    const raw = entry.body.slice(hl.startChar, hl.endChar);
+  function upsertEncounter(entry, hl) { upsertEncounterIn(entry, entry.body, hl); }
+  // `text` is whatever the offsets index into — a 필사 passage body, or a
+  // 역번역 문단's revealed target
+  function upsertEncounterIn(entry, text, hl) {
+    const raw = String(text || "").slice(hl.startChar, hl.endChar);
     const w = normWord(raw);
     if (!w || w.length < 2) return;
     let term = findTerm(w);
     if (!term) { term = { id: uid(), word: w, definitions: [], encounters: [] }; state.terms.push(term); }
-    const ctx = sentenceAround(entry.body, hl.startChar, hl.endChar).text;
+    const ctx = sentenceAround(String(text || ""), hl.startChar, hl.endChar).text;
     const existing = term.encounters.find((x) => x.entryId === entry.id && Math.abs(x.charStart - hl.startChar) < 2);
     if (existing) { existing.context = ctx; existing.note = hl.note || existing.note; existing.date = entry.date; existing.charStart = hl.startChar; existing.charEnd = hl.endChar; }
     else term.encounters.push({ entryId: entry.id, date: entry.date, context: ctx, note: hl.note || "", charStart: hl.startChar, charEnd: hl.endChar });
@@ -502,13 +527,27 @@
     touchAppState();
   }
   function termEncountersSorted(t) { return [...t.encounters].sort((a, b) => a.date.localeCompare(b.date)); }
-  function termClaudeNotes(word) {
+  // every △ thread in the app: 필사 passages and 역번역 문단s alike
+  function allThreads() {
     const out = [];
     for (const e of state.entries) {
-      if (e.kind !== "transcription") continue;
-      for (const th of e.threads) {
-        if (normWord(th.anchorText) === word) for (const m of th.messages) if (m.role === "assistant") out.push({ entry: e, thread: th, msg: m });
+      if (e.kind === "transcription") {
+        for (const p of (Array.isArray(e.passages) ? e.passages : [e])) {
+          for (const t of (p.threads || [])) out.push({ entry: e, thread: t, text: p.body || "" });
+        }
+      } else if (e.kind === "reverse") {
+        for (const p of (e.reverse && Array.isArray(e.reverse.passages) ? e.reverse.passages : [])) {
+          for (const t of (p.threads || [])) out.push({ entry: e, thread: t, text: p.target || "" });
+        }
       }
+    }
+    return out;
+  }
+  function termClaudeNotes(word) {
+    const out = [];
+    for (const { entry, thread } of allThreads()) {
+      if (normWord(thread.anchorText) !== word) continue;
+      for (const m of thread.messages) if (m.role === "assistant" && !m.pending) out.push({ entry, thread, msg: m });
     }
     return out;
   }
@@ -532,7 +571,7 @@
     if (e.kind === "reflection") {
       data.reflection = e.reflection || { mode: "correct", blocks: [{ id: uid(), kind: "user", text: "" }] };
     } else if (e.kind === "reverse") {
-      data.reverse = e.reverse || { koSource: "", target: "", attempts: [], nextRevisit: null, stage: "new" };
+      data.reverse = e.reverse && Array.isArray(e.reverse.passages) ? e.reverse : normReverse(e.reverse);
     } else {
       syncTopLevelToPassage(e); // make sure passages[active] holds latest top-level edits
       data.passages = e.passages || [];
@@ -705,6 +744,7 @@
       "reverseView","revDate","revWeekday","revStageBadge","revDeleteBtn","revAuthor","revTitle","revPage",
       "revSetup","revSetupKo","revSetupTarget","revSetupSave","revSetupCancel",
       "revWrite","revKo","revAttemptH","revAttemptInput","revSubmit","revWriteMeta","revEditSetup","revPrior","revCompare",
+      "revPassBefore","revPassAfter","revAddPassage","revHlToolbar",
       "patternsBtn","patternsCount","patternsView","patternsSub","patternsFilter","patternsStarFilter","patternsCats","patternList",
       "wordsView","wordsSub","wordsFilter","wordsSort","wordsGrid","sentencesView","sentencesSub","sentencesFilter","sentenceList",
       "projectsBtn","projectsCount","projectsView","projectsSort","projectsFilter","projectsGrid","projectsKindFilter","projectsNewBtn",
@@ -798,6 +838,8 @@
     D.revSetupKo.value = ""; D.revSetupTarget.value = "";
     D.revKo.textContent = ""; D.revAttemptInput.value = "";
     D.revCompare.innerHTML = ""; D.revPrior.innerHTML = "";
+    D.revPassBefore.innerHTML = ""; D.revPassAfter.innerHTML = "";
+    D.revHlToolbar.hidden = true;
   }
 
   /* ─────────────────────── DAILY: ENTRY ─────────────────────── */
@@ -814,7 +856,7 @@
       if (typeof presetSource.page === "string") e.source.page = presetSource.page;
     }
     state.entries.push(e);
-    currentId = e.id; activeThreadId = null; revModeId = null;
+    currentId = e.id; activeThreadId = null; revModeId = null; revPassageId = null;
     if (e.kind === "transcription" && Array.isArray(e.passages) && e.passages.length) {
       loadPassageIntoTopLevel(e, e.passages[0].id);
     } else currentPassageId = null;
@@ -870,7 +912,7 @@
     const prev = currentEntry();
     if (prev) syncTopLevelToPassage(prev);
     if (!findEntry(id)) return;
-    currentId = id; activeThreadId = null; editing = false; revModeId = null;
+    currentId = id; activeThreadId = null; editing = false; revModeId = null; revPassageId = null;
     currentPassageId = null;
     const ne = currentEntry();
     if (ne && ne.kind === "transcription" && Array.isArray(ne.passages) && ne.passages.length) {
@@ -890,7 +932,7 @@
     deletedEntries.add(e.id); dirtyEntries.delete(e.id);
     pruneEntryFromTerms(e.id);
     const nx = orderedEntries()[0];
-    currentId = nx ? nx.id : null; revModeId = null;
+    currentId = nx ? nx.id : null; revModeId = null; revPassageId = null;
     revDrafts.delete(e.id);
     scheduleSync(); cacheLocal();
     renderRecentList(); showDaily(); renderSidebarCounts();
@@ -1085,20 +1127,38 @@
 
   /* ── reverse entry view ── */
   let revMode = "write";          // "setup" | "write" | "compare"
-  let revModeId = null;           // entry id revMode belongs to
+  let revModeId = null;           // entry/passage key revMode belongs to
+  let revPassageId = null;        // active 문단 in the open 역번역 entry
+  let revTargetView = "diff";     // 목표 영문 column: "diff" | "read" (markable)
   let revShownAttemptId = null;   // attempt rendered in the compare panel
   let revBusy = false;
   const revDrafts = new Map();    // session-only drafts, keyed by entry id
 
+  function revPassages(e) {
+    if (!e || e.kind !== "reverse") return [];
+    if (!e.reverse || !Array.isArray(e.reverse.passages) || !e.reverse.passages.length) e.reverse = normReverse(e.reverse);
+    return e.reverse.passages;
+  }
+  // `reverseOf` is the ACTIVE 문단 — the rest of the view is written against one drill
   function reverseOf(e) {
-    if (!e.reverse || typeof e.reverse !== "object") e.reverse = normReverse(null);
-    return e.reverse;
+    const ps = revPassages(e);
+    return ps.find((p) => p.id === revPassageId) || ps[0];
   }
+  const revDueOn = (p) => (p && p.nextRevisit && p.nextRevisit <= todayISO() ? p.nextRevisit : null);
   function revIsDue(e) {
-    if (e.kind !== "reverse") return false;
-    const rv = e.reverse;
-    return !!(rv && rv.nextRevisit && rv.nextRevisit <= todayISO());
+    if (!e || e.kind !== "reverse") return false;
+    return revPassages(e).some(revDueOn);
   }
+  // the document's stage = the least advanced 문단 still in the cycle
+  function revEntryStage(e) {
+    const ps = revPassages(e);
+    if (!ps.length) return "new";
+    const due = ps.filter(revDueOn);
+    if (due.length) return due.sort((a, b) => String(a.nextRevisit).localeCompare(String(b.nextRevisit)))[0].stage;
+    return ps.map((p) => p.stage).sort((a, b) => REV_STAGES.indexOf(a) - REV_STAGES.indexOf(b))[0];
+  }
+  const revEntryNextRevisit = (e) =>
+    revPassages(e).map((p) => p.nextRevisit).filter(Boolean).sort()[0] || null;
   function revAdvanceStage(rv) {
     if (rv.stage === "new") { rv.stage = "d3"; rv.nextRevisit = plusDaysISO(3); }
     else if (rv.stage === "d3") { rv.stage = "d14"; rv.nextRevisit = plusDaysISO(14); }
@@ -1107,9 +1167,12 @@
 
   function renderReverseEntry() {
     const e = currentEntry(); if (!e || e.kind !== "reverse") return;
+    const ps = revPassages(e);
+    if (!revPassageId || !ps.some((p) => p.id === revPassageId)) revPassageId = ps[0].id;
     const rv = reverseOf(e);
 
-    if (revModeId !== e.id) { revModeId = e.id; revMode = "write"; revShownAttemptId = null; }
+    const key = e.id + "/" + rv.id;
+    if (revModeId !== key) { revModeId = key; revMode = "write"; revShownAttemptId = null; revTargetView = "diff"; }
     if (!rv.koSource.trim() || !rv.target.trim()) revMode = "setup";
 
     D.revDate.value = e.date;
@@ -1117,7 +1180,8 @@
     D.revAuthor.value = e.source.author; D.revTitle.value = e.source.title; D.revPage.value = e.source.page;
     D.revStageBadge.hidden = false;
     D.revStageBadge.textContent = REV_STAGE_LABEL[rv.stage] || "1차";
-    D.revStageBadge.className = "rev-stage-badge stage-" + rv.stage + (revIsDue(e) ? " is-due" : "");
+    D.revStageBadge.className = "rev-stage-badge stage-" + rv.stage + (revDueOn(rv) ? " is-due" : "");
+    renderRevPassageCards(e, ps, rv);
 
     D.revSetup.hidden = revMode !== "setup";
     D.revWrite.hidden = revMode !== "write";
@@ -1141,7 +1205,7 @@
       D.revSubmit.disabled = revBusy;
       const bits = [];
       if (rv.attempts.length) bits.push(`지금까지 ${rv.attempts.length}번 제출`);
-      if (rv.nextRevisit) bits.push(revIsDue(e) ? "오늘 재시도" : `다음 재시도 ${fmtDate(rv.nextRevisit)}`);
+      if (rv.nextRevisit) bits.push(revDueOn(rv) ? "오늘 재시도" : `다음 재시도 ${fmtDate(rv.nextRevisit)}`);
       else if (rv.stage === "done") bits.push("주기 완료");
       D.revWriteMeta.textContent = bits.join(" · ");
       renderRevPrior(e);
@@ -1158,6 +1222,89 @@
     } else {
       D.revCompare.innerHTML = "";
     }
+  }
+
+  // 문단 카드 — koSource only. A card must never show another 문단's target.
+  function renderRevPassageCards(e, ps, active) {
+    if (ps.length <= 1) { D.revPassBefore.innerHTML = ""; D.revPassAfter.innerHTML = ""; return; }
+    const at = ps.findIndex((p) => p.id === active.id);
+    const card = (p, n) => {
+      const ko = (p.koSource || "").trim();
+      const done = p.attempts.length;
+      return `<div class="passage-card rev-pass-card" data-revpass="${escAttr(p.id)}" role="button" tabindex="0" title="이 문단으로 전환">
+        <div class="passage-card-h">
+          <span class="passage-card-num">문단 ${n}</span>
+          <span class="passage-card-meta"><span class="rev-stage-badge stage-${p.stage}${revDueOn(p) ? " is-due" : ""}">${esc(REV_STAGE_LABEL[p.stage])}</span>${done ? ` ${done}회` : ""}</span>
+        </div>
+        <div class="passage-card-body tall">${ko ? esc(ko) : '<i style="opacity:.5">(빈 원문)</i>'}</div>
+        <button class="passage-card-del" data-revpassdel="${escAttr(p.id)}" title="이 문단 삭제">× 삭제</button>
+      </div>`;
+    };
+    D.revPassBefore.innerHTML = ps.slice(0, Math.max(at, 0)).map((p, i) => card(p, i + 1)).join("");
+    D.revPassAfter.innerHTML = ps.slice(at + 1).map((p, i) => card(p, at + 2 + i)).join("");
+  }
+  function addRevPassage() {
+    const e = currentEntry(); if (!e || e.kind !== "reverse") return;
+    const ps = revPassages(e);
+    const p = blankRevPassage();
+    ps.push(p);
+    revPassageId = p.id;
+    revMode = "setup"; revModeId = null;
+    touchEntry(e);
+    renderReverseEntry(); renderRecentList();
+    setTimeout(() => { try { D.revSetupKo.focus(); } catch (_) {} }, 0);
+  }
+  function deleteRevPassage(id) {
+    const e = currentEntry(); if (!e || e.kind !== "reverse") return;
+    const ps = revPassages(e);
+    if (ps.length <= 1) { toast("문단이 하나뿐입니다 — 삭제 대신 내용을 고쳐 보세요."); return; }
+    const i = ps.findIndex((p) => p.id === id); if (i < 0) return;
+    if (!confirm("이 문단을 삭제할까요?\n시도 기록과 표시도 함께 사라집니다. 되돌릴 수 없습니다.")) return;
+    const wasActive = id === revPassageId;
+    ps.splice(i, 1);
+    if (wasActive) { revPassageId = ps[Math.min(i, ps.length - 1)].id; revModeId = null; }
+    touchEntry(e);
+    renderReverseEntry(); renderRecentList(); renderSidebarCounts();
+  }
+  function switchRevPassage(id) {
+    const e = currentEntry(); if (!e || e.kind !== "reverse") return;
+    if (id === revPassageId) return;
+    captureRevInterp();
+    revPassageId = id; revModeId = null;
+    renderReverseEntry();
+    D.reverseView.scrollIntoView({ block: "start" });
+  }
+
+  /* ── the revealed target as a 필사 surface: marks, △ anchors, term underlines ── */
+  function revBuildTargetHtml(p) {
+    const text = p.target || "";
+    if (!text) return "";
+    const len = text.length;
+    const hls = [...p.highlights].map((h) => ({ ...h, startChar: clamp(h.startChar, 0, len), endChar: clamp(h.endChar, 0, len) }))
+      .filter((h) => h.endChar > h.startChar).sort((a, b) => a.startChar - b.startChar);
+    const clean = []; let last = -1;
+    for (const h of hls) if (h.startChar >= last) { clean.push(h); last = h.endChar; }
+    const ev = [];
+    for (const h of clean) { ev.push({ pos: h.startChar, k: 2, hl: h }); ev.push({ pos: h.endChar, k: 0, hl: h }); }
+    for (const t of p.threads) if (Number.isFinite(t.anchorChar)) ev.push({ pos: clamp(t.anchorChar, 0, len), k: 1, thread: t });
+    ev.sort((a, b) => a.pos - b.pos || a.k - b.k);
+    let html = "", cur = 0, inHl = null;
+    for (const x of ev) {
+      const seg = text.slice(cur, x.pos);
+      html += inHl ? esc(seg) : termWrap(seg);
+      cur = x.pos;
+      if (x.k === 2) {
+        const raw = text.slice(x.hl.startChar, x.hl.endChar), n = normWord(raw);
+        const isTerm = n && termWords.has(n);
+        inHl = x.hl;
+        html += `<mark class="hl-${x.hl.type}${isTerm ? " term-mark" : ""}"${isTerm ? ` data-term="${escAttr(n)}"` : ""}${x.hl.note ? ` data-note="${escAttr(x.hl.note)}"` : ""} data-hl="${escAttr(x.hl.id)}">`;
+      } else if (x.k === 0) { html += "</mark>"; inHl = null; }
+      else html += `<sup class="thread-anchor" data-thread="${escAttr(x.thread.id)}" title="Claude 대화"></sup>`;
+    }
+    const tail = text.slice(cur);
+    html += inHl ? esc(tail) : termWrap(tail);
+    if (inHl) html += "</mark>";
+    return html;
   }
 
   function renderRevPrior(e) {
@@ -1262,6 +1409,10 @@
         ? `<div class="rev-analyzing">Claude가 대조 분석 중…</div>`
         : `<div class="rev-analyzing is-failed">분석이 아직 없습니다.<button type="button" class="rev-btn rev-btn--ghost" id="revRetryBtn">다시 분석</button></div>`;
 
+    const reading = revTargetView === "read";
+    const nCorr = rv.corrections.length;
+    const threadCount = rv.threads.reduce((a, t) => a + t.messages.length, 0);
+
     D.revCompare.innerHTML = `
       <div class="rev-cmp-head">
         <span class="rev-cmp-n">${idx + 1}번째 시도</span>
@@ -1275,13 +1426,51 @@
           <div class="rev-col-body">${wdRender(d.a, d.left, "wd-del")}</div>
         </div>
         <div class="rev-col">
-          <div class="rev-col-h">목표 영문</div>
-          <div class="rev-col-body">${wdRender(d.b, d.right, "wd-ins")}</div>
+          <div class="rev-col-h">
+            목표 영문
+            <span class="rev-col-seg">
+              <button type="button" data-tview="diff"${reading ? "" : ' class="is-on"'}>대조</button>
+              <button type="button" data-tview="read"${reading ? ' class="is-on"' : ""}>표시</button>
+            </span>
+          </div>
+          ${reading
+            ? `<div class="rev-col-body rev-target-read" id="revTargetRead">${revBuildTargetHtml(rv)}</div>`
+            : `<div class="rev-col-body">${wdRender(d.b, d.right, "wd-ins")}</div>`}
         </div>
       </div>
-      ${d.skipped ? `<div class="rev-note-small">문단이 너무 길어 단어 대조는 건너뛰었습니다.</div>` : `<div class="rev-note-small">단어 차이 ${d.changes}개</div>`}
-      <div class="rev-analysis">${analysis}</div>`;
+      ${reading
+        ? `<div class="rev-note-small">목표 영문을 드래그하면 🟡 단어 · 🔵 구절로 표시하거나 △ 로 물어볼 수 있습니다.</div>`
+        : (d.skipped ? `<div class="rev-note-small">문단이 너무 길어 단어 대조는 건너뛰었습니다.</div>` : `<div class="rev-note-small">단어 차이 ${d.changes}개</div>`)}
+      <div class="rev-analysis">${analysis}</div>
+
+      <section class="rev-study">
+        <div class="rev-h">이 문단에 대한 나의 해석</div>
+        <textarea class="rev-interp-input" id="revInterpInput"
+          placeholder="목표 영문을 한국어로 옮겨 보거나, 읽으며 떠오른 것을 적습니다.&#10;⌘↵ 로 보내면 Claude가 답하면서 단어·문장을 노트에 정리해 둡니다.">${esc(rv.interpretation)}</textarea>
+        <div class="rev-foot">
+          <button type="button" class="rev-btn" id="revInterpSend">△ Claude에게 보내기<kbd>⌘↵</kbd></button>
+          ${nCorr ? `<button type="button" class="rev-btn rev-btn--ghost" id="revRevisions">${nCorr}번 고쳐 씀 — 이전 해석 보기</button>` : ""}
+        </div>
+        <div class="rev-threads" id="revThreads">${revThreadsHtml(rv)}</div>
+        ${threadCount ? "" : `<div class="rev-note-small">아직 △ 대화가 없습니다.</div>`}
+      </section>`;
     D.revCompare.querySelectorAll(".rev-practice-input").forEach((ta) => autoGrow(ta, 260));
+    const ii = $("revInterpInput");
+    if (ii) { autoGrow(ii, 420); revInterpSnapshot = rv.interpretation; }
+  }
+  function revThreadsHtml(p) {
+    if (!p.threads.length) return "";
+    return [...p.threads].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt))).map((t) => {
+      const head = t.anchorText
+        ? `<div class="thread-anchor-quote" data-revjump="${escAttr(t.id)}"><span class="tri">△</span><span class="q">${esc(t.anchorText)}</span><button class="thread-del" data-revthdel="${escAttr(t.id)}">삭제</button></div>`
+        : `<div class="thread-anchor-quote"><span class="q" style="font-family:var(--font-sans);font-style:normal;color:var(--color-text-tertiary);">나의 해석·질문에 대한 Claude</span><button class="thread-del" data-revthdel="${escAttr(t.id)}">삭제</button></div>`;
+      const msgs = t.messages.map((m) => m.role === "user"
+        ? `<div class="msg role-user"><span class="msg-who">나</span><div class="msg-content">${esc(m.content)}</div></div>`
+        : m.pending
+          ? `<div class="msg role-assistant pending"><span class="msg-who">Claude</span><div class="msg-content">…생각 중</div></div>`
+          : `<div class="msg role-assistant"><span class="msg-who">Claude</span><div class="msg-content">${mdInline(m.content)}</div></div>`).join("");
+      return `<div class="thread">${head}${msgs}</div>`;
+    }).join("");
   }
 
   function saveReverseSetup() {
@@ -1355,6 +1544,223 @@
       if (currentId === e.id && revMode === "compare") renderReverseCompare(e, at);
       else if (currentId === e.id) renderReverseEntry();
     }
+  }
+
+  /* ── marking the revealed target (필사 기능) ── */
+  let revPendingSel = null;
+  let revInterpSnapshot = "";
+  function hideRevToolbar() { D.revHlToolbar.hidden = true; revPendingSel = null; }
+  function onRevTargetSelect() {
+    const root = $("revTargetRead");
+    if (!root) return hideRevToolbar();
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || !sel.rangeCount) return hideRevToolbar();
+    const r = sel.getRangeAt(0);
+    if (!root.contains(r.commonAncestorContainer)) return hideRevToolbar();
+    const s = charOffsetIn(root, r.startContainer, r.startOffset);
+    const t = charOffsetIn(root, r.endContainer, r.endOffset);
+    const a = Math.min(s, t), b = Math.max(s, t);
+    if (b <= a) return hideRevToolbar();
+    revPendingSel = { s: a, e: b };
+    const e = currentEntry(); const p = e && reverseOf(e);
+    D.revHlToolbar.querySelector(".hl-btn--clear").hidden =
+      !(p && p.highlights.some((h) => h.startChar < b && h.endChar > a));
+    D.revHlToolbar.hidden = false;
+    try {
+      const rect = r.getBoundingClientRect();
+      const tw = D.revHlToolbar.offsetWidth || 220, th = D.revHlToolbar.offsetHeight || 32;
+      const left = clamp(rect.left + rect.width / 2 - tw / 2, 8, document.documentElement.clientWidth - tw - 8);
+      let top = rect.top - th - 8;
+      if (top < 8) top = rect.bottom + 8;
+      D.revHlToolbar.style.left = left + "px";
+      D.revHlToolbar.style.top = top + "px";
+    } catch (_) { /* no layout to measure — the toolbar still works, just unmoved */ }
+  }
+  function repaintRevTarget() {
+    const e = currentEntry(); if (!e || e.kind !== "reverse") return;
+    const host = $("revTargetRead");
+    if (host) host.innerHTML = revBuildTargetHtml(reverseOf(e));
+  }
+  function applyRevHighlight(type) {
+    const sel = revPendingSel, e = currentEntry();
+    if (!sel || !e || e.kind !== "reverse") return;
+    const p = reverseOf(e);
+    if (type === "ask") { hideRevToolbar(); askClaudeAboutRev(e, p, sel.s, sel.e); return; }
+    const frag = type === "yellow" || type === "blue" ? p.target.slice(sel.s, sel.e).trim() : "";
+    p.highlights = p.highlights.filter((h) => h.endChar <= sel.s || h.startChar >= sel.e);
+    if (type !== "clear") {
+      const hl = { id: uid(), startChar: sel.s, endChar: sel.e, type, note: "" };
+      p.highlights.push(hl);
+      if (type === "yellow") upsertEncounterIn(e, p.target, hl);   // feeds 나의 단어
+    }
+    touchEntry(e);
+    hideRevToolbar();
+    try { window.getSelection().removeAllRanges(); } catch (_) {}
+    repaintRevTarget();
+    if (frag) appendToRevInterp(frag);
+    renderSidebarCounts();
+  }
+  function appendToRevInterp(frag) {
+    const e = currentEntry(); if (!e) return;
+    const p = reverseOf(e);
+    const ta = $("revInterpInput"); if (!ta) return;
+    const cur = ta.value;
+    const val = cur + (cur.length && !/\n\s*$/.test(cur) ? "\n" : "") + frag + " : ";
+    ta.value = val; p.interpretation = val;
+    autoGrow(ta, 420); touchEntry(e);
+    ta.focus();
+    try { ta.setSelectionRange(val.length, val.length); } catch (_) {}
+    revInterpSnapshot = val;
+  }
+  function captureRevInterp() {
+    const e = currentEntry(); if (!e || e.kind !== "reverse") return;
+    const ta = $("revInterpInput"); if (!ta) return;
+    const p = reverseOf(e);
+    const before = revInterpSnapshot, after = ta.value;
+    if (after !== p.interpretation) { p.interpretation = after; touchEntry(e); }
+    if (before.trim() !== "" && after !== before) {
+      p.corrections.push({ timestamp: nowISO(), previousText: before, newText: after });
+      touchEntry(e);
+    }
+    revInterpSnapshot = after;
+  }
+  function showRevRevisions() {
+    const e = currentEntry(); if (!e || e.kind !== "reverse") return;
+    const p = reverseOf(e);
+    if (!p.corrections.length) return;
+    const wrap = document.createElement("div");
+    wrap.innerHTML =
+      `<p style="font-size:12px;color:var(--color-text-tertiary);margin-bottom:14px;">고쳐 쓴 자취는 지워지지 않습니다.</p>` +
+      p.corrections.map((c) =>
+        `<div style="margin-bottom:16px;padding-bottom:14px;border-bottom:0.5px solid var(--color-border-tertiary);">
+          <div style="font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--color-text-tertiary);margin-bottom:6px;">${esc(fmtDate(c.timestamp))} ${esc(String(c.timestamp).slice(11, 16))}</div>
+          <div style="font-family:var(--font-korean);font-size:13.5px;line-height:1.7;color:var(--color-text-tertiary);text-decoration:line-through;">${esc(c.previousText) || "<i>(빈 해석)</i>"}</div>
+          <div style="font-family:var(--font-korean);font-size:13.5px;line-height:1.7;color:var(--color-text-primary);margin-top:4px;">${esc(c.newText) || "<i>(빈 해석)</i>"}</div>
+        </div>`).join("") +
+      `<div style="font-family:var(--font-korean);font-size:13.5px;line-height:1.7;">지금: ${esc(p.interpretation) || "<i>(빈 해석)</i>"}</div>`;
+    openModal("이전 해석들", wrap);
+  }
+
+  /* ── Claude on a 역번역 문단 (△ 묻기 · 해석 보내기) ── */
+  async function runRevClaude(e, p, th, userText, opts) {
+    opts = opts || {};
+    if (claudeBusy) return;
+    claudeBusy = true; aiBusy++;
+    th.messages.push({ id: uid(), role: "user", content: userText, timestamp: nowISO() });
+    const pending = { id: uid(), role: "assistant", content: "", pending: true, timestamp: nowISO() };
+    th.messages.push(pending);
+    th.updatedAt = nowISO();
+    touchEntry(e);
+    const host = $("revThreads"); if (host) host.innerHTML = revThreadsHtml(p);
+    let added = null;
+    try {
+      const { data: sess } = await sb.auth.getSession();
+      const tok = sess && sess.session ? sess.session.access_token : null;
+      if (!tok) throw new Error("로그인이 만료되었습니다. 다시 로그인해 주세요.");
+      const turns = th.messages.filter((m) => !m.pending && m.content.trim()).map((m) => ({ role: m.role, content: m.content }));
+      const context = { author: e.source.author, title: e.source.title, page: e.source.page,
+        body: p.target, interpretation: p.interpretation, selection: th.anchorText || null };
+      const resp = await fetch(CLAUDE_FN, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", apikey: SUPABASE_KEY, Authorization: `Bearer ${tok}` },
+        body: JSON.stringify({ messages: turns, context, extract: !!opts.extract }),
+      });
+      const out = await resp.json().catch(() => ({}));
+      if (!resp.ok || out.error) throw new Error((out && out.error) ? out.error : `요청 실패 (${resp.status})`);
+      pending.pending = false; pending.content = out.text || "(빈 응답)";
+      delete pending.pending;
+      if (opts.extract && Array.isArray(out.picks) && out.picks.length) added = applyRevPicks(e, p, out.picks);
+    } catch (err) {
+      th.messages = th.messages.filter((m) => m.id !== pending.id);
+      toast("Claude 호출 실패 — " + (err.message || String(err)));
+    }
+    claudeBusy = false; aiBusy = Math.max(0, aiBusy - 1);
+    th.updatedAt = nowISO();
+    touchEntry(e);
+    if (currentId === e.id && revMode === "compare") renderReverseEntry();
+    renderSidebarCounts();
+    if (added && (added.words || added.phrases)) {
+      const parts = [];
+      if (added.words) parts.push(`단어 ${added.words}개`);
+      if (added.phrases) parts.push(`문장 ${added.phrases}개`);
+      toast(`Claude가 ${parts.join(" · ")}를 나의 노트에 더했습니다`);
+    }
+  }
+  function applyRevPicks(e, p, picks) {
+    let words = 0, phrases = 0;
+    for (const pick of picks) {
+      if (!pick || typeof pick !== "object") continue;
+      const note = typeof pick.note === "string" ? pick.note.trim() : "";
+      const raw = typeof pick.text === "string" ? pick.text.trim() : "";
+      if (!raw) continue;
+      if (pick.kind === "word") {
+        const span = findWordSpan(p.target, raw);
+        let w, ctx;
+        if (span) {
+          w = normWord(p.target.slice(span.start, span.end));
+          ctx = sentenceAround(p.target, span.start, span.end).text;
+          if (w && w.length >= 2 && !p.highlights.some((h) => h.startChar < span.end && h.endChar > span.start)) {
+            p.highlights.push({ id: uid(), startChar: span.start, endChar: span.end, type: "yellow", note: "" });
+          }
+        } else { w = normWord(raw); ctx = sentenceContaining(p.target, raw); }
+        if (w && w.length >= 2) {
+          let term = findTerm(w);
+          if (!term) { term = { id: uid(), word: w, definitions: [], encounters: [] }; state.terms.push(term); }
+          let enc = term.encounters.find((x) => x.entryId === e.id && (!span || Math.abs(x.charStart - span.start) < 2));
+          if (!enc) { enc = { entryId: e.id, date: e.date, context: ctx, note: "", charStart: span ? span.start : 0, charEnd: span ? span.end : 0 }; term.encounters.push(enc); }
+          else if (ctx) enc.context = ctx;
+          if (note && !term.definitions.some((d) => String(d).trim() === note)) term.definitions.push(note);
+          words++;
+        }
+      } else {
+        const lc = raw.toLowerCase();
+        let th = p.threads.find((t) => t.anchorText && t.anchorText.trim().toLowerCase() === lc);
+        if (!th) {
+          const i = p.target.toLowerCase().indexOf(lc);
+          th = normThread({ anchorChar: i >= 0 ? i : null, anchorText: i >= 0 ? p.target.slice(i, i + raw.length) : raw, fromInterp: true });
+          p.threads.push(th);
+        }
+        if (note && !th.messages.some((m) => m.role === "assistant" && String(m.content).trim() === note)) {
+          th.messages.push({ id: uid(), role: "assistant", content: note, timestamp: nowISO() });
+        }
+        phrases++;
+      }
+    }
+    rebuildTermIndex();
+    touchEntry(e); touchAppState();
+    return { words, phrases };
+  }
+  function askClaudeAboutRev(e, p, s, e2) {
+    const anchorText = p.target.slice(s, e2).trim();
+    const th = normThread({ anchorChar: s, anchorText });
+    p.threads.push(th);
+    touchEntry(e);
+    try { window.getSelection().removeAllRanges(); } catch (_) {}
+    renderReverseEntry();
+    const q = prompt(`“${anchorText}”\n\n무엇이 궁금한가요?`, "");
+    if (q == null || !q.trim()) return;
+    runRevClaude(e, p, th, q.trim());
+  }
+  async function sendRevInterp() {
+    const e = currentEntry(); if (!e || e.kind !== "reverse") return;
+    const p = reverseOf(e);
+    const ta = $("revInterpInput"); if (!ta) return;
+    p.interpretation = ta.value;
+    const text = p.interpretation.trim();
+    if (!text) { ta.focus(); toast("먼저 해석이나 질문을 적어 주세요"); return; }
+    let th = p.threads.find((t) => t.fromInterp && !t.anchorText);
+    if (!th) { th = normThread({ fromInterp: true }); p.threads.push(th); }
+    const lastUser = [...th.messages].reverse().find((m) => !m.pending && m.role === "user");
+    if (lastUser && lastUser.content.trim() === text) { toast("바뀐 내용이 없습니다"); return; }
+    await runRevClaude(e, p, th, text, { extract: true });
+  }
+  function deleteRevThread(id) {
+    const e = currentEntry(); if (!e || e.kind !== "reverse") return;
+    const p = reverseOf(e);
+    if (!confirm("이 대화를 삭제할까요?")) return;
+    p.threads = p.threads.filter((t) => t.id !== id);
+    touchEntry(e);
+    renderReverseEntry(); renderSidebarCounts();
   }
 
   function shownAttempt() {
@@ -1988,7 +2394,7 @@
     const dot = e.date === today ? '<span class="recent-dot"></span>' : "";
     const lbl = srcLabel(e) || "제목 없음";
     const stage = e.kind === "reverse"
-      ? `<span class="recent-stage stage-${(e.reverse && e.reverse.stage) || "new"}">${esc(REV_STAGE_LABEL[(e.reverse && e.reverse.stage) || "new"])}</span>` : "";
+      ? `<span class="recent-stage stage-${revEntryStage(e)}">${esc(REV_STAGE_LABEL[revEntryStage(e)])}</span>` : "";
     return `<li><button type="button" class="recent-item${e.id === currentId && parseHash().name === "daily" ? " is-active" : ""}" data-id="${escAttr(e.id)}">
       <span class="recent-item-date">${dot}${esc(fmtMD(e.date))}${stage}</span>
       <span class="recent-item-src">${esc(lbl)}</span>
@@ -2004,7 +2410,7 @@
   // 오늘 재시도 — only rendered when something is actually due
   function renderRevisitList() {
     const due = state.entries.filter(revIsDue)
-      .sort((a, b) => String(a.reverse.nextRevisit).localeCompare(String(b.reverse.nextRevisit)));
+      .sort((a, b) => String(revEntryNextRevisit(a)).localeCompare(String(revEntryNextRevisit(b))));
     D.revisitBlock.hidden = !due.length;
     if (!due.length) { D.revisitList.innerHTML = ""; return; }
     const today = todayISO();
@@ -2017,9 +2423,8 @@
     for (const e of state.entries) {
       if (e.kind === "reflection") continue;   // 사유는 더 이상 화면에 나오지 않습니다
       projectKeys.add(projectKey(e));
-      if (e.kind === "reverse") continue;      // 역번역 doesn't feed 나의 문장
-      for (const t of e.threads) if (t.anchorText && t.messages.length) sc++;
     }
+    for (const { thread } of allThreads()) if (thread.anchorText && thread.messages.length) sc++;
     const pc = Array.isArray(state.patterns) ? state.patterns.length : 0;
     D.sentencesCount.textContent = sc ? String(sc) : "";
     D.patternsCount.textContent = pc ? String(pc) : "";
@@ -2082,12 +2487,9 @@
   let sentencesState = { filter: "", open: null };
   function gatherSentences() {
     const out = [];
-    for (const e of state.entries) {
-      if (e.kind !== "transcription") continue;
-      for (const t of e.threads) {
-        if (!t.anchorText || !t.messages.length) continue;
-        out.push({ entry: e, thread: t, text: t.anchorText, date: e.date, createdAt: t.createdAt });
-      }
+    for (const { entry, thread } of allThreads()) {
+      if (!thread.anchorText || !thread.messages.length) continue;
+      out.push({ entry, thread, text: thread.anchorText, date: entry.date, createdAt: thread.createdAt });
     }
     out.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
     return out;
@@ -2181,7 +2583,8 @@
     for (const e of ordered) {
       let t;
       if (e.kind === "reverse") {
-        t = (e.reverse && e.reverse.koSource) || "";   // never the target — that's the answer key
+        const ps = (e.reverse && e.reverse.passages) || [];
+        t = (ps.find((x) => (x.koSource || "").trim()) || {}).koSource || "";  // never the target
       } else t = e.body;
       if (t && t.trim()) return t.trim().slice(0, 220);
     }
@@ -2410,13 +2813,16 @@
       if (searchState.to && e.date > searchState.to) return false;
       if (searchState.author && !e.source.author.toLowerCase().includes(searchState.author.toLowerCase())) return false;
       if (e.kind === "reverse") {
-        // 역번역 has no highlights and no △ threads — those filters exclude it outright
-        if (searchState.colors.size || searchState.claude) return false;
+        const ps = (e.reverse && e.reverse.passages) || [];
+        if (searchState.colors.size && !ps.some((p) => p.highlights.some((h) => searchState.colors.has(h.type)))) return false;
+        if (searchState.claude && !ps.some((p) => p.threads.some((t) => t.messages.length))) return false;
         if (!q) return true;
-        const rv = e.reverse || {};
-        // the target is deliberately absent: searching must never surface the answer key
-        const hay = [rv.koSource || "", e.source.author, e.source.title, e.source.page]
-          .concat((rv.attempts || []).map((a) => a.text)).join("\n").toLowerCase();
+        // koSource, attempts, my reading and △ talk — never the target itself
+        const hay = [e.source.author, e.source.title, e.source.page].concat(
+          ps.flatMap((p) => [p.koSource || "", p.interpretation || ""]
+            .concat(p.attempts.map((a) => a.text))
+            .concat(p.threads.flatMap((t) => [t.anchorText].concat(t.messages.map((m) => m.content)))))
+        ).join("\n").toLowerCase();
         return hay.includes(ql);
       }
       if (searchState.colors.size && !e.highlights.some((h) => searchState.colors.has(h.type))) return false;
@@ -2437,11 +2843,13 @@
       const ql = q.toLowerCase();
       let snip, colors = "", hasC = "", kindTag = "";
       if (e.kind === "reverse") {
-        const rv = e.reverse || {};
-        const fields = [rv.koSource || ""].concat((rv.attempts || []).map((a) => a.text)); // never the target
-        const hit = (q && fields.find((f) => f.toLowerCase().includes(ql))) || rv.koSource || "";
+        const ps = (e.reverse && e.reverse.passages) || [];
+        const fields = ps.flatMap((p) => [p.koSource || "", p.interpretation || ""].concat(p.attempts.map((a) => a.text))); // never the target
+        const hit = (q && fields.find((f) => f.toLowerCase().includes(ql))) || (ps[0] && ps[0].koSource) || "";
         snip = snippet(hit, q);
-        kindTag = `<span class="sr-kind">역번역 · ${esc(REV_STAGE_LABEL[rv.stage] || "1차")}</span>`;
+        colors = [...new Set(ps.flatMap((p) => p.highlights.map((h) => h.type)))].map((c) => `<span class="dot ${c === "yellow" ? "dot-y" : "dot-b"}" style="display:inline-block;width:7px;height:7px;border-radius:2px;"></span>`).join(" ");
+        hasC = ps.some((p) => p.threads.some((t) => t.messages.length)) ? "△" : "";
+        kindTag = `<span class="sr-kind">역번역 · ${esc(REV_STAGE_LABEL[revEntryStage(e)])}${ps.length > 1 ? ` · ${ps.length}문단` : ""}</span>`;
       } else {
         const fields = [e.body, e.interpretation].concat(e.threads.flatMap((t) => t.messages.map((m) => m.content)));
         const hit = (q && fields.find((f) => f.toLowerCase().includes(ql))) || e.body || e.interpretation || "";
@@ -2694,7 +3102,7 @@
       for (const e of state.entries) dirtyEntries.add(e.id);
       dirtyAppState = true;
       currentId = (orderedEntries()[0] || {}).id || null;
-      currentPassageId = null; revModeId = null; revDrafts.clear();
+      currentPassageId = null; revModeId = null; revPassageId = null; revDrafts.clear();
       cacheLocal(); scheduleSync();
       renderRecentList(); renderSidebarCounts(); renderRoute();
       toast(`${n}개의 필사를 가져왔습니다`);
@@ -2814,8 +3222,36 @@
       revShownAttemptId = b.dataset.revOpen; revMode = "compare"; renderReverseEntry();
       try { D.revCompare.scrollIntoView({ behavior: "smooth", block: "start" }); } catch (_) {}
     });
+    // 문단 카드 · 새 문단
+    const onRevPass = (ev) => {
+      const del = ev.target.closest("[data-revpassdel]");
+      if (del) { ev.stopPropagation(); deleteRevPassage(del.dataset.revpassdel); return; }
+      const card = ev.target.closest("[data-revpass]");
+      if (card) switchRevPassage(card.dataset.revpass);
+    };
+    D.revPassBefore.addEventListener("click", onRevPass);
+    D.revPassAfter.addEventListener("click", onRevPass);
+    D.revAddPassage.addEventListener("click", addRevPassage);
+
+    // marking the revealed target
+    D.revHlToolbar.addEventListener("mousedown", (ev) => ev.preventDefault());
+    D.revHlToolbar.querySelectorAll(".hl-btn").forEach((b) => b.addEventListener("click", () => applyRevHighlight(b.dataset.type)));
+    document.addEventListener("selectionchange", () => { if (!D.reverseView.hidden && $("revTargetRead")) onRevTargetSelect(); });
+    D.revCompare.addEventListener("mouseover", (ev) => {
+      const t = ev.target.closest("#revTargetRead [data-term],#revTargetRead [data-note]");
+      if (!t) return;
+      clearTimeout(tipTimer); tipTimer = setTimeout(() => showWordTip(t), 130);
+    });
+    D.revCompare.addEventListener("mouseout", (ev) => { if (ev.target.closest("#revTargetRead [data-term],#revTargetRead [data-note]")) hideWordTip(); });
+
     D.revCompare.addEventListener("click", (ev) => {
-      if (ev.target.closest("#revBackToWrite")) { revMode = "write"; renderReverseEntry(); try { D.revAttemptInput.focus(); } catch (_) {} return; }
+      const tv = ev.target.closest("[data-tview]");
+      if (tv) { revTargetView = tv.dataset.tview; hideRevToolbar(); renderReverseEntry(); return; }
+      const thDel = ev.target.closest("[data-revthdel]");
+      if (thDel) { ev.stopPropagation(); deleteRevThread(thDel.dataset.revthdel); return; }
+      if (ev.target.closest("#revRevisions")) { showRevRevisions(); return; }
+      if (ev.target.closest("#revInterpSend")) { sendRevInterp(); return; }
+      if (ev.target.closest("#revBackToWrite")) { captureRevInterp(); revMode = "write"; renderReverseEntry(); try { D.revAttemptInput.focus(); } catch (_) {} return; }
       if (ev.target.closest("#revFileBtn")) { fileAnalysisPatterns(); return; }
       if (ev.target.closest("#revRetryBtn")) {
         const e = currentEntry(); if (!e || e.kind !== "reverse") return;
@@ -2823,6 +3259,24 @@
         if (at) runReverseAnalysis(e, at);
       }
     });
+    // 해석 칸 — same palimpsest rule as 필사: the previous reading is kept
+    D.revCompare.addEventListener("input", (ev) => {
+      if (ev.target.id !== "revInterpInput") return;
+      const e = currentEntry(); if (!e || e.kind !== "reverse") return;
+      reverseOf(e).interpretation = ev.target.value;
+      autoGrow(ev.target, 420);
+      touchEntry(e);
+    });
+    D.revCompare.addEventListener("focusin", (ev) => {
+      if (ev.target.id === "revInterpInput") revInterpSnapshot = ev.target.value;
+    });
+    D.revCompare.addEventListener("focusout", (ev) => {
+      if (ev.target.id === "revInterpInput") captureRevInterp();
+    });
+    D.revCompare.addEventListener("keydown", (ev) => {
+      if (ev.target.id === "revInterpInput" && (ev.metaKey || ev.ctrlKey) && ev.key === "Enter") { ev.preventDefault(); sendRevInterp(); }
+    });
+
     // 필사 칸 — the reader hand-copies the correct sentence; saved onto that diff
     D.revCompare.addEventListener("input", (ev) => {
       const ta = ev.target.closest("[data-rev-practice]"); if (!ta) return;
