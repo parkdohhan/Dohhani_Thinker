@@ -1002,6 +1002,15 @@ a { color: inherit; }
   /* on a phone the spotlight is more confusing than helpful — just centre the card */
   .tour-spot { display: none; }
   .tour-card { left: 50% !important; top: 50% !important; transform: translate(-50%, -50%); }
+
+  /* 저자·작품·쪽 shared one row and clipped ("Ocean V·"). Give each its own line. */
+  .entry-source { flex-direction: column; align-items: stretch; gap: 2px; }
+  .entry-source .src-dot { display: none; }
+  .src-author, .src-title, .src-page { width: 100%; min-width: 0; flex: none; }
+  .src { border-bottom-color: var(--color-border-tertiary); }
+
+  /* there is no ⌘ key on a phone */
+  .action kbd, .rev-btn kbd, .interp-send kbd { display: none; }
 }
 @media (max-width: 820px) {
   .app:not(.sidebar-forced-open) .sidebar { width: 0; min-width: 0; overflow: hidden; border-right: none; }
