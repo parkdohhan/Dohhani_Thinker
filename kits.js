@@ -81,4 +81,81 @@ window.PILSA_KITS = [
       },
     ],
   },
+
+  /* ── 박도한, 「상호작용 서사에서의 감정 궤적 이탈 측정」 (본인 논문 Track A v0.4) ── */
+  {
+    id: "tem-framing",
+    kind: "reverse",
+    title: "감정 궤적 이탈 측정 — 틀 잡기",
+    blurb: "공백 진술, 연구 질문, 기여 선언. 논문이 자기 자리를 만드는 문장들입니다. 「~해 왔다」의 현재완료, 「~지 않았다」의 부정 완료, 무관사 추상명사가 반복해서 걸립니다.",
+    tag: "논문 · 서론",
+    note: "박도한 본인 논문 (Working Draft v0.4). 영문은 이 앱에서 만든 번역본입니다.",
+    source: { author: "박도한", title: "감정 궤적 이탈 측정", page: "§1 서론" },
+    items: [
+      {
+        ko: "상호작용 서사에서 서로 다른 체험자는 서로 다른 경험을 하지만, 그 “다름”은 대부분 플롯 분기의 차이로만 기술되어 왔다.",
+        en: "In interactive narrative, different participants have different experiences, but that “difference” has largely been described only as a difference of plot branching.",
+      },
+      {
+        ko: "상호작용 서사의 핵심 약속은 체험자마다 다른 경험을 제공한다는 것이다. 그러나 대부분의 도구는 플롯 분기를 통한 경로의 다양성에 집중해 왔으며, 체험자가 서사를 관통하며 겪는 감정의 궤적은 명시적으로 추적되지 않았다.",
+        en: "The central promise of interactive narrative is that it offers each participant a different experience. Most tools, however, have concentrated on the variety of paths afforded by a branching plot, and the trajectory of emotion a participant undergoes in passing through the narrative has not been tracked explicitly.",
+      },
+      {
+        ko: "이 공백은 정서 컴퓨팅 쪽에서도 정확히 메워지지 않는다. 이들은 기본적으로 관찰된 감정 데이터를 사후에 분석하는 도구이며, 상호작용 서사 내부의 실시간 궤적 비교에는 적용되지 않는다.",
+        en: "Nor is the gap filled precisely from the side of affective computing. These are, fundamentally, tools for analysing observed emotion data after the fact, and they do not extend to real-time trajectory comparison inside an interactive narrative.",
+      },
+      {
+        ko: "첫째, 시스템적 기여. 감정 벡터를 씬의 일차 속성으로 두고, 매 턴 체험자 감정 상태에 따라 접근 가능 씬 집합을 계산하는 인터랙티브 서사 시스템. 기존 저작 도구가 명시적 플롯 분기 조건식으로 경로를 가르는 데 반해, TEM은 분기 조건식 없이 체험자 감정 상태와 씬 원본 감정 사이의 거리만으로 다음 경로를 결정한다.",
+        en: "First, a systems contribution. An interactive narrative system that treats the emotion vector as a first-class property of the scene and computes, at every turn, the accessible pin set from the participant's emotional state. Where existing authoring tools divide paths by explicit plot-branching conditionals, TEM determines the next path with no branching conditional at all, using only the distance between the participant's emotional state and the scene's original emotion.",
+      },
+      {
+        ko: "본 논문은 이들을 하나로 묶는 통합 이론을 제안하지 않는다. 본 논문이 다루는 것은 이 변형들 중 감정 궤적의 이탈이라는 한 단면을, 인터랙티브 서사 안에서 실시간으로 측정 가능한 양으로 만드는 장치이다.",
+        en: "This paper proposes no unified theory binding them together. What it addresses is a single facet of these transformations — divergence in emotional trajectory — and the apparatus that renders that facet a quantity measurable in real time inside an interactive narrative.",
+      },
+      {
+        ko: "첫째, 목적 함수의 방향이 반대다. 드라마 매니저는 목표 궤적을 향해 최적화하며 체험자의 이탈을 되돌려야 할 오차로 취급한다. TEM은 어떤 목표 궤적으로도 조향하지 않는다. 작가의 감정 궤적은 최적화 대상이 아니라 측정 기준선이며, 거기서의 발산 그 자체가 렌더링되는 내용물이다.",
+        en: "First, the objective function points the other way. A drama manager optimises toward a target trajectory and treats the participant's departure from it as error to be corrected. TEM steers toward no target trajectory whatever. The author's emotional trajectory is not an object of optimisation but a measurement baseline, and the divergence from it is itself the content that gets rendered.",
+      },
+    ],
+  },
+
+  {
+    id: "tem-argument",
+    kind: "reverse",
+    title: "감정 궤적 이탈 측정 — 논증과 한계",
+    blurb: "설계를 왜 그렇게 했는지 변호하는 문장, 그리고 스스로 한계를 긋는 문장. 「~이 아니라 ~이다」 구문과 조건절, 그리고 한계 선언 특유의 명사구 문장이 관건입니다.",
+    tag: "논문 · 논증",
+    note: "박도한 본인 논문 (Working Draft v0.4). 영문은 이 앱에서 만든 번역본입니다.",
+    source: { author: "박도한", title: "감정 궤적 이탈 측정", page: "§3–8" },
+    items: [
+      {
+        ko: "가장 검증 가능한 차이는 데이터 구조 수준의 분기 소멸이다. beat 기반 드라마 매니저조차 beat에 선·후행 조건을 부여하므로 내부에는 부분적 플롯 그래프가 남는다. TEM의 choice에는 next_scene_id 열이 존재하지 않으며, 가지치기할 플롯 그래프 자체가 없다. 분기를 숨긴 것이 아니라 스키마 차원에서 아예 없앤 것이다.",
+        en: "The most verifiable difference is the disappearance of branching at the level of the data structure. Even a beat-based drama manager assigns pre- and postconditions to its beats, so a partial plot graph remains inside it. TEM's choice table has no next_scene_id column, and there is no plot graph to prune in the first place. The branching has not been hidden; it has been removed at the level of the schema.",
+      },
+      {
+        ko: "이 설계에서 중요한 것은 전이 패턴이 접근 공간의 반경이 아니라 중심을 옮긴다는 점이다. 패턴이 반경만 조절한다면 엔진은 단순 룩업 테이블로 격하되고 만다. 그래서 패턴마다 중심 자체가 이동해야 한다.",
+        en: "What matters in this design is that the transition pattern moves the centre of the accessible space rather than its radius. Were a pattern only to adjust the radius, the engine would be reduced to a simple lookup table. The centre itself must therefore shift with each pattern.",
+      },
+      {
+        ko: "세 인자를 더하지 않고 곱한 것이 이 설계의 요점이다. 선형 결합에서는 한 축이 낮아도 다른 축이 보상할 수 있지만, 곱셈은 그 보상을 구조적으로 막는다.",
+        en: "The point of this design is that the three factors are multiplied rather than summed. Under a linear combination one axis can compensate for another that is low; multiplication blocks that compensation structurally.",
+      },
+      {
+        ko: "동일 총 이탈량이라도, drift-dominant한 체험과 fixation-dominant한 체험은 체험적으로 구분된다. 전자는 “다른 길로 빠지는” 느낌이고 후자는 “한 지점에 꽂혀 되풀이되는” 느낌이다. 두 축을 분리하지 않으면 동일 총량 값으로 뭉뚱그려진다.",
+        en: "Even at the same total divergence, a drift-dominant experience and a fixation-dominant one are distinguishable as experiences. The former feels like straying onto another path; the latter, like being caught on a single point and repeating it. Without separating the two axes, both collapse into the same aggregate figure.",
+      },
+      {
+        ko: "Ground truth 부재. 어떤 궤적이 “올바른” 궤적인지에 대한 기준이 없다. 이는 본 메트릭이 부합이나 정확성이 아니라 유사도와 이탈 양식을 측정하도록 설계된 결과이다.",
+        en: "Absence of ground truth. There is no criterion for which trajectory is the “correct” one. This follows from the metric having been designed to measure similarity and modes of divergence rather than conformity or accuracy.",
+      },
+      {
+        ko: "15개 페르소나 전원이 평균 0.64 이상으로 떠 있고, 인간 독자에게 기대되는 낮은 꼬리가 없었다. 따라서 이 계측기는 상대 비교에서는 유효하지만 절대 분포에서는 천장 편향을 보인다. 우리는 이것을 도구의 실패로 보지 않고 측정된 경계로 읽는다.",
+        en: "All fifteen personas sat above a mean of 0.64, and the low tail one would expect of human readers was absent. The instrument is therefore valid for relative comparison but exhibits a ceiling bias in absolute distribution. We read this not as a failure of the tool but as a measured boundary.",
+      },
+      {
+        ko: "본 논문이 남기는 것은 거대 이론의 증명이 아니라, 손에 잡히는 측정 장치와 체험 시스템이다. 기억이 변형되며 전파된다는 관찰은 Bartlett 이래 두껍게 쌓여 왔다. 본 논문은 그 변형의 양상을 측정 가능한 양으로 분해하고, 그 양이 흐르는 체험 환경을 실제로 구축했다. 작더라도 하나의 새로운 좌표를 보탠다.",
+        en: "What this paper leaves behind is not the proof of a grand theory but a measuring instrument and an experiential system one can put a hand on. The observation that memory is transformed as it propagates has accumulated thickly since Bartlett. This paper decomposes the modes of that transformation into measurable quantities and actually builds the environment through which those quantities flow. Small as it is, it adds one new coordinate.",
+      },
+    ],
+  },
 ];

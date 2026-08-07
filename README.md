@@ -11,7 +11,7 @@ proxy live on **Supabase** (project `Dohhani_Thinker`, ref `ooqzmtgbhctsrghjnrda
 
 ## What's in it
 
-- **Daily mode** — sidebar (`+ 새 필사 · 검색 · 나의 단어 · 나의 문장 · 프로젝트·아카이브 · 최근`) + entry view (date · author/title/page · English body · Korean interpretation).
+- **Daily mode** — sidebar (`+ 새 문서 · 검색 · 나의 단어 · 나의 문장 · 나의 패턴 · 프로젝트 · 오늘 재시도 · 최근`) + entry view (date · author/title/page · English body · Korean interpretation).
 - **Highlighting** — click the body to edit, drag-select, then 🟡 단어 / 🔵 구절 / △ 묻기. Yellow words feed the personal dictionary; offsets re-anchor as you edit.
 - **나의 단어 (dictionary)** — every yellow-marked word, its definitions (you add them), every encounter in order with the surrounding sentence + source, and what Claude said about it. When a word reappears in another entry it gets a dotted underline + a hover tooltip ("처음 만난 곳…").
 - **Claude** — three ways in: (a) write your Korean rendering / questions in the **interpretation field** and press **△ Claude에게 보내기** (`⌘↵`) — Claude answers in the panel *and* files the words/phrases you were unsure about into 나의 단어 / 나의 문장 automatically (a 🟡 mark + △ anchors appear in the body); (b) select a sentence → "△ 묻기" creates a △ anchor + a thread; (c) ask a general question in the panel at the bottom. Concise, Korean-by-default literary tutoring (word meaning · grammar · style · checking your translation). Calls go through a Supabase Edge Function — the API key never reaches the browser.
@@ -21,7 +21,7 @@ proxy live on **Supabase** (project `Dohhani_Thinker`, ref `ooqzmtgbhctsrghjnrda
 - **역번역 (reverse translation)** — a drill, not a piece of writing. Pair a Korean paragraph of your own with its English translation (the *target*), then reproduce the English from the Korean with the target hidden. On submit: a two-column word-diff, plus a Claude analysis that sorts every divergence into four categories (`lexis-register` / `connectives` / `structure` / `articles-prepositions`). Each finding shows **the whole sentence** it occurs in — your wording marked red, the target's green — with a 필사 box underneath to hand-copy the correct sentence. Fixed revisit schedule: +3 days, then +2 weeks. Attempts are append-only; the target is never in the DOM while you're writing.
 - **나의 패턴** — the divergences you chose to keep, deduped by `내 표현 → 목표 표현` so a repeated failure raises a counter instead of adding a row. Four category chips double as a weakness map.
 - **Errors preserved** — editing a saved interpretation pushes the prior version into the entry's `corrections`; visible in Art mode and via "n번 고쳐 씀 — 이전 해석 보기".
-- **Keyboard** — `⌘N` new · `⌘K` search · `⌘S` force-sync · `⌘1`/`⌘2`/`⌘3` pick 필사/사유/역번역 in the new-doc modal · `⌘1`/`⌘2` yellow/blue on a selection (in edit mode) · `⌘↵` sends the interpretation / 사유 paragraph / 역번역 attempt · `Esc` closes things.
+- **Keyboard** — `⌘N` new · `⌘K` search · `⌘S` force-sync · `⌘1`/`⌘3` pick 필사/역번역 in the new-doc modal · `⌘1`/`⌘2` yellow/blue on a selection (in edit mode) · `⌘↵` sends the interpretation / 역번역 attempt · `Esc` closes things.
 - Cross-device sync (local-first cache → Supabase), light + dark, JSON export/import, responsive sidebar collapse.
 
 ## One-time Supabase setup (do this once, then it just works)
@@ -72,7 +72,7 @@ Redirect URLs) if you kept email confirmation on; otherwise nothing else to do.
 ### Data model (in `entries.data` jsonb, one row per entry)
 
 ```
-Entry  { id, date, kind:'transcription'|'reflection'|'reverse',
+Entry  { id, date, kind:'transcription'|'reverse',    // legacy 'reflection' rows still exist — see below
          source:{author,title,page}, createdAt, updatedAt }
 
 // kind: 'transcription' — one document, many passages
@@ -82,9 +82,9 @@ Entry  { id, date, kind:'transcription'|'reflection'|'reverse',
                    threads:[{id,anchorChar,anchorText,fromInterp,createdAt,messages:[…]}] }]
      + body / highlights / interpretation / corrections / threads   // mirror of the active passage
 
-// kind: 'reflection' — an alternating chain of my paragraphs and Claude's corrections
-     + reflection:{ mode, blocks:[ {id,kind:'user',text}
-                                 | {id,kind:'ai',mode,input,corrected,errors:[{tag,detail}],…} ] }
+// kind: 'reflection' — the removed 사유 mode (legacy). Old rows keep their
+//   reflection:{mode,blocks} data, still sync, and still appear in JSON backups —
+//   but the UI never shows them (`isShown` filters them out everywhere).
 
 // kind: 'reverse' — the 역번역 drill
      + reverse:{ koSource, target,                       // target: never rendered while writing
