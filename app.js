@@ -124,7 +124,7 @@
   const deletedEntries = new Set();
   let dirtyAppState = false;
 
-  function newVault() { return { entries: [], terms: [], patterns: [], settings: { artAesthetic: "cha", curatorNote: "", unpublishedIds: [] } }; }
+  function newVault() { return { entries: [], terms: [], patterns: [], settings: { artAesthetic: "cha", curatorNote: "", unpublishedIds: [], tourSeenAt: "" } }; }
 
   /* 역번역 (reverse translation) — the four categories a diff can fall into */
   const REV_CATEGORIES = ["lexis-register", "connectives", "structure", "articles-prepositions"];
@@ -377,6 +377,9 @@
         artAesthetic: (v.settings && v.settings.artAesthetic) || "cha",
         curatorNote: (v.settings && v.settings.curatorNote) || "",
         unpublishedIds: (v.settings && Array.isArray(v.settings.unpublishedIds)) ? v.settings.unpublishedIds : [],
+        // set once the intro tour has been finished or skipped; synced, so it
+        // doesn't reappear on a second device
+        tourSeenAt: (v.settings && typeof v.settings.tourSeenAt === "string") ? v.settings.tourSeenAt : "",
       },
     };
   }
@@ -708,6 +711,7 @@
       "projectDetailView","projectBackBtn","projectCuratorEditBtn","projectArtScroll",
       "searchScrim","searchInput","searchClose","searchFilters","chipColor","chipClaude","chipFrom","chipTo","chipAuthor","searchResults",
       "modalScrim","modalClose","modalTitle","modalBody","modalActions","wordTip","toast",
+      "tourBtn","tour","tourSpot","tourCard","tourStep","tourTitle","tourText","tourDots","tourSkip","tourPrev","tourNext",
       "authorList","titleList",
     ].forEach((id) => (D[id] = $(id)));
   }
@@ -2485,6 +2489,93 @@
     setTimeout(() => ta.focus(), 0);
   }
 
+  /* ─────────────────────── 안내 투어 ─────────────────────── */
+  // Anchors are looked up lazily: a step whose element isn't on screen right now
+  // (the body editor before any entry exists, say) just renders without a spotlight.
+  const TOUR = [
+    { title: "필사에 오신 것을 환영합니다",
+      text: "영어를 손으로 옮겨 적고, 모르는 것을 표시하고, 한국어로 옮겨 보고, 그 자리에서 물어보는 일지입니다.<br/>1분이면 어디에 무엇이 있는지 다 봅니다." },
+    { anchor: () => D.newEntryBtn, title: "새 문서 · ⌘N",
+      text: "두 종류가 있습니다.<br/><b>필사</b> — 남의 영어를 옮겨 적고 해석합니다.<br/><b>역번역</b> — 내 한국어에서 영어를 다시 만들고, 정답지와 대조합니다." },
+    { anchor: () => (D.entryView.hidden ? null : D.bodyField), title: "본문 — 클릭해서 쓰고, 드래그해서 표시",
+      text: "본문을 클릭하면 편집이 됩니다. 글자를 드래그하면 작은 막대가 뜹니다.<br/><b>🟡 단어</b> 모르는 단어 · <b>🔵 구절</b> 헷갈리는 구절 · <b>△ 묻기</b> 그 자리에서 Claude에게." },
+    { anchor: () => (D.entryView.hidden ? null : D.interpInput), title: "해석 — ⌘↵ 로 보내기",
+      text: "한국어로 옮겨 보고, 헷갈리는 건 헷갈린 채로 적어 두세요.<br/><b>⌘↵</b> 를 누르면 Claude가 답하면서, 물어본 단어와 문장을 아래 노트에 자동으로 정리해 둡니다." },
+    { anchor: () => D.wordsBtn, title: "나의 단어 · 나의 문장",
+      text: "🟡로 표시한 단어가 <b>나의 단어</b>에 쌓입니다. 같은 단어를 나중에 다시 만나면 점선 밑줄이 붙고, 처음 만난 날과 문장을 보여줍니다.<br/>△로 물어본 문장은 <b>나의 문장</b>에 모입니다." },
+    { anchor: () => D.patternsBtn, title: "역번역과 나의 패턴",
+      text: "역번역은 정답지를 가린 채 영어를 다시 만드는 훈련입니다. 제출하면 나란히 대조하고, 갈린 자리를 네 범주로 분석해 줍니다.<br/>담아 둔 갈림은 <b>나의 패턴</b>에 쌓여 약점 지도가 됩니다. 3일 뒤·2주 뒤에 같은 문단을 다시 씁니다." },
+    { anchor: () => D.projectsBtn, title: "프로젝트 — 다시 읽기",
+      text: "같은 저자·작품의 기록이 자동으로 한 묶음이 됩니다. 열면 흑백 세리프의 아카이브로, 쓴 것을 작품처럼 다시 읽을 수 있습니다." },
+    { anchor: () => D.tourBtn, title: "여기까지입니다",
+      text: "이 안내는 언제든 여기서 다시 열 수 있습니다.<br/>이제 <b>새 문서</b>로 한 구절 옮겨 적는 일에서 시작해 보세요." },
+  ];
+  let tourIdx = 0;
+  function tourSeen() { return !!(state.settings && state.settings.tourSeenAt); }
+  function markTourSeen() {
+    if (!state.settings) return;
+    if (state.settings.tourSeenAt) return;
+    state.settings.tourSeenAt = nowISO();
+    touchAppState();
+  }
+  function openTour(from) {
+    tourIdx = Number.isFinite(from) ? from : 0;
+    D.tour.hidden = false;
+    renderTourStep();
+    window.addEventListener("resize", renderTourStep);
+  }
+  function closeTour() {
+    D.tour.hidden = true;
+    D.tourSpot.hidden = true;
+    window.removeEventListener("resize", renderTourStep);
+    markTourSeen();
+  }
+  function tourGo(d) {
+    const n = tourIdx + d;
+    if (n < 0) return;
+    if (n >= TOUR.length) { closeTour(); return; }
+    tourIdx = n;
+    renderTourStep();
+  }
+  function renderTourStep() {
+    if (D.tour.hidden) return;
+    const s = TOUR[tourIdx];
+    D.tourStep.textContent = `${tourIdx + 1} / ${TOUR.length}`;
+    D.tourTitle.textContent = s.title;
+    D.tourText.innerHTML = s.text;               // authored above, not user input
+    D.tourPrev.hidden = tourIdx === 0;
+    D.tourNext.textContent = tourIdx === TOUR.length - 1 ? "시작하기" : "다음";
+    D.tourDots.innerHTML = TOUR.map((_, i) => `<span class="tour-dot${i === tourIdx ? " is-on" : ""}"></span>`).join("");
+
+    const el = s.anchor ? s.anchor() : null;
+    const r = el && el.offsetParent !== null ? el.getBoundingClientRect() : null;
+    if (r && r.width && r.height) {
+      const pad = 6;
+      D.tourSpot.hidden = false;
+      D.tourSpot.style.left = (r.left - pad) + "px";
+      D.tourSpot.style.top = (r.top - pad) + "px";
+      D.tourSpot.style.width = (r.width + pad * 2) + "px";
+      D.tourSpot.style.height = (r.height + pad * 2) + "px";
+      placeTourCard(r);
+    } else {
+      D.tourSpot.hidden = true;
+      D.tourCard.style.left = ""; D.tourCard.style.top = "";
+      D.tourCard.classList.add("is-centered");
+    }
+  }
+  function placeTourCard(r) {
+    D.tourCard.classList.remove("is-centered");
+    const cw = D.tourCard.offsetWidth || 340, ch = D.tourCard.offsetHeight || 200;
+    const vw = document.documentElement.clientWidth, vh = document.documentElement.clientHeight;
+    let left = r.right + 16;
+    if (left + cw > vw - 12) left = r.left - cw - 16;      // flip to the other side
+    if (left < 12) left = Math.min(Math.max(12, r.left), vw - cw - 12); // or just fit
+    let top = r.top + r.height / 2 - ch / 2;
+    top = clamp(top, 12, Math.max(12, vh - ch - 12));
+    D.tourCard.style.left = left + "px";
+    D.tourCard.style.top = top + "px";
+  }
+
   /* ─────────────────────── AUTH ─────────────────────── */
   let authMode = "signin"; // or "signup"
   function setAuthMode(m) {
@@ -2569,6 +2660,9 @@
     renderRecentList(); renderSidebarCounts();
     // re-render whatever view is active
     renderRoute();
+    // first run: show the tour once the real settings have arrived, so a second
+    // device doesn't replay it
+    if (!tourSeen()) setTimeout(() => { if (!tourSeen()) openTour(0); }, 400);
   }
 
   /* ─────────────────────── EXPORT / IMPORT ─────────────────────── */
@@ -2642,6 +2736,13 @@
     D.importBtn.addEventListener("click", () => D.importInput.click());
     D.importInput.addEventListener("change", () => { importJSON(D.importInput.files && D.importInput.files[0]); D.importInput.value = ""; });
     D.signOutBtn.addEventListener("click", () => { if (confirm("로그아웃할까요?")) signOut(); });
+
+    // 안내 투어
+    D.tourBtn.addEventListener("click", () => openTour(0));
+    D.tourNext.addEventListener("click", () => tourGo(1));
+    D.tourPrev.addEventListener("click", () => tourGo(-1));
+    D.tourSkip.addEventListener("click", closeTour);
+    D.tour.addEventListener("mousedown", (ev) => { if (ev.target === D.tour) closeTour(); });
     D.recentList.addEventListener("click", (ev) => { const b = ev.target.closest(".recent-item"); if (b) openEntry(b.dataset.id); });
     D.revisitList.addEventListener("click", (ev) => { const b = ev.target.closest(".recent-item"); if (b) { go("#daily"); openEntry(b.dataset.id); } });
 
@@ -2967,6 +3068,12 @@
       if (mod && /^n$/i.test(ev.key)) { ev.preventDefault(); newEntry(); return; }
       if (mod && /^s$/i.test(ev.key)) { ev.preventDefault(); flushSyncNow(); flashStatus("저장됨"); return; }
       if (mod && (ev.key === "1" || ev.key === "2") && editing && pendingSel) { ev.preventDefault(); applyHighlight(ev.key === "1" ? "yellow" : "blue"); return; }
+      if (!D.tour.hidden) {
+        if (ev.key === "Escape") { ev.preventDefault(); closeTour(); }
+        else if (ev.key === "ArrowRight" || ev.key === "Enter") { ev.preventDefault(); tourGo(1); }
+        else if (ev.key === "ArrowLeft") { ev.preventDefault(); tourGo(-1); }
+        return;
+      }
       if (ev.key === "Escape") { if (!D.modalScrim.hidden) closeModal(); else if (!D.searchScrim.hidden) closeSearch(); else { closeSlashMenu(); hideToolbar(); } hideWordTip(); }
     });
     window.addEventListener("resize", () => { applySidebar(); if (!D.entryView.hidden) autoGrow(D.interpInput); if (!D.reverseView.hidden) autoGrow(D.revAttemptInput, 900); autoGrow(D.claudeInput, 160); hideToolbar(); hideWordTip(); });
