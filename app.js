@@ -120,10 +120,29 @@
   const deletedEntries = new Set();
   let dirtyAppState = false;
 
-  function newVault() { return { entries: [], terms: [], settings: { artAesthetic: "cha", curatorNote: "", unpublishedIds: [] } }; }
+  function newVault() { return { entries: [], terms: [], patterns: [], settings: { artAesthetic: "cha", curatorNote: "", unpublishedIds: [] } }; }
+
+  /* 역번역 (reverse translation) — the four categories a diff can fall into */
+  const REV_CATEGORIES = ["lexis-register", "connectives", "structure", "articles-prepositions"];
+  const REV_CAT_LABEL = {
+    "lexis-register": "어휘·격",
+    "connectives": "연결",
+    "structure": "구조",
+    "articles-prepositions": "관사·전치사",
+  };
+  const REV_STAGES = ["new", "d3", "d14", "done"];
+  const REV_STAGE_LABEL = { new: "1차", d3: "3일", d14: "2주", done: "완료" };
+  const kindOf = (k) => (k === "reflection" || k === "reverse" ? k : "transcription");
+  const kindLabelOf = (k) => (k === "reflection" ? "사유" : k === "reverse" ? "역번역" : "필사");
+  function plusDaysISO(days) {
+    const d = new Date(todayISO() + "T00:00:00");
+    d.setDate(d.getDate() + days);
+    const z = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())}`;
+  }
 
   function blankEntry(kind) {
-    kind = kind === "reflection" ? "reflection" : "transcription";
+    kind = kindOf(kind);
     const t = nowISO();
     const base = {
       id: uid(), date: todayISO(),
@@ -133,6 +152,8 @@
     };
     if (kind === "reflection") {
       base.reflection = { mode: "correct", blocks: [{ id: uid(), kind: "user", text: "" }] };
+    } else if (kind === "reverse") {
+      base.reverse = { koSource: "", target: "", attempts: [], nextRevisit: null, stage: "new" };
     } else {
       const p0 = blankPassage();
       base.passages = [p0];
@@ -224,10 +245,65 @@
     if (blocks[blocks.length - 1].kind !== "user") blocks.push({ id: uid(), kind: "user", text: "" });
     return { mode, blocks };
   }
+  /* ── 역번역 normalization ── */
+  function normRevDiff(d) {
+    d = d && typeof d === "object" ? d : {};
+    return {
+      mine: typeof d.mine === "string" ? d.mine : "",
+      targetFrag: typeof d.targetFrag === "string" ? d.targetFrag : "",
+      category: REV_CATEGORIES.includes(d.category) ? d.category : "structure",
+      note: typeof d.note === "string" ? d.note : "",
+      // what the reader hand-copied of the correct sentence (their own, not the AI's)
+      practice: typeof d.practice === "string" ? d.practice : "",
+    };
+  }
+  function normRevAnalysis(a) {
+    if (!a || typeof a !== "object") return null;
+    return {
+      verdict: typeof a.verdict === "string" ? a.verdict : "",
+      diffs: Array.isArray(a.diffs) ? a.diffs.map(normRevDiff) : [],
+      better: Array.isArray(a.better) ? a.better.filter((x) => typeof x === "string") : [],
+    };
+  }
+  function normRevAttempt(a) {
+    a = a && typeof a === "object" ? a : {};
+    return {
+      id: typeof a.id === "string" && a.id ? a.id : uid(),
+      timestamp: a.timestamp || nowISO(),
+      text: typeof a.text === "string" ? a.text : "",
+      analysis: normRevAnalysis(a.analysis),
+    };
+  }
+  function normReverse(r) {
+    r = r && typeof r === "object" ? r : {};
+    return {
+      koSource: typeof r.koSource === "string" ? r.koSource : "",
+      target: typeof r.target === "string" ? r.target : "",
+      attempts: Array.isArray(r.attempts) ? r.attempts.map(normRevAttempt) : [],
+      nextRevisit: typeof r.nextRevisit === "string" && r.nextRevisit ? r.nextRevisit.slice(0, 10) : null,
+      stage: REV_STAGES.includes(r.stage) ? r.stage : "new",
+    };
+  }
+  function normPattern(p) {
+    p = p && typeof p === "object" ? p : {};
+    const hits = Number(p.hits);
+    return {
+      id: typeof p.id === "string" && p.id ? p.id : uid(),
+      mine: typeof p.mine === "string" ? p.mine : "",
+      targetFrag: typeof p.targetFrag === "string" ? p.targetFrag : "",
+      category: REV_CATEGORIES.includes(p.category) ? p.category : "structure",
+      note: typeof p.note === "string" ? p.note : "",
+      starred: !!p.starred,
+      sourceEntryId: typeof p.sourceEntryId === "string" ? p.sourceEntryId : "",
+      createdAt: p.createdAt || nowISO(),
+      hits: Number.isFinite(hits) && hits >= 1 ? Math.floor(hits) : 1,
+    };
+  }
+
   function normEntry(e) {
     e = e && typeof e === "object" ? e : {};
     const s = e.source && typeof e.source === "object" ? e.source : {};
-    const kind = e.kind === "reflection" ? "reflection" : "transcription";
+    const kind = kindOf(e.kind);
     const out = {
       id: typeof e.id === "string" ? e.id : uid(),
       date: typeof e.date === "string" && e.date ? e.date.slice(0, 10) : todayISO(),
@@ -239,6 +315,8 @@
     if (kind === "reflection") {
       const r = e.reflection && typeof e.reflection === "object" ? e.reflection : {};
       out.reflection = normReflection(r);
+    } else if (kind === "reverse") {
+      out.reverse = normReverse(e.reverse);
     } else {
       let passages;
       if (Array.isArray(e.passages) && e.passages.length) {
@@ -290,6 +368,7 @@
           charStart: x.charStart | 0, charEnd: x.charEnd | 0,
         })) : [],
       })) : [],
+      patterns: Array.isArray(v.patterns) ? v.patterns.filter((x) => x && typeof x === "object").map(normPattern) : [],
       settings: {
         artAesthetic: (v.settings && v.settings.artAesthetic) || "cha",
         curatorNote: (v.settings && v.settings.curatorNote) || "",
@@ -416,7 +495,7 @@
   function termClaudeNotes(word) {
     const out = [];
     for (const e of state.entries) {
-      if (e.kind === "reflection") continue;
+      if (e.kind !== "transcription") continue;
       for (const th of e.threads) {
         if (normWord(th.anchorText) === word) for (const m of th.messages) if (m.role === "assistant") out.push({ entry: e, thread: th, msg: m });
       }
@@ -442,6 +521,8 @@
     const data = { kind: e.kind || "transcription", source: e.source };
     if (e.kind === "reflection") {
       data.reflection = e.reflection || { mode: "correct", blocks: [{ id: uid(), kind: "user", text: "" }] };
+    } else if (e.kind === "reverse") {
+      data.reverse = e.reverse || { koSource: "", target: "", attempts: [], nextRevisit: null, stage: "new" };
     } else {
       syncTopLevelToPassage(e); // make sure passages[active] holds latest top-level edits
       data.passages = e.passages || [];
@@ -458,7 +539,7 @@
       // multi-passage document collapses to its first passage on the next pull.
       passages: d.passages,
       body: d.body, highlights: d.highlights, interpretation: d.interpretation, corrections: d.corrections,
-      threads: d.threads, messages: d.messages, reflection: d.reflection,
+      threads: d.threads, messages: d.messages, reflection: d.reflection, reverse: d.reverse,
       createdAt: r.created_at, updatedAt: r.updated_at });
   }
   async function pullAll() {
@@ -488,9 +569,17 @@
       // app_state
       if (!ar.error && ar.data) {
         const rTerms = Array.isArray(ar.data.terms) ? ar.data.terms : [];
+        const rPatterns = Array.isArray(ar.data.patterns) ? ar.data.patterns : [];
         const rSettings = ar.data.settings || {};
         const remoteNewer = !state.__appUpdatedAt || String(ar.data.updated_at) >= String(state.__appUpdatedAt);
-        if (remoteNewer) { state.terms = normVault({ terms: rTerms }).terms; state.settings = normVault({ settings: rSettings }).settings; }
+        if (remoteNewer) {
+          state.terms = normVault({ terms: rTerms }).terms;
+          state.settings = normVault({ settings: rSettings }).settings;
+          // `patterns` arrived with 역번역 — an older row simply has none yet, so an
+          // empty remote list must not wipe locally-collected ones.
+          if (rPatterns.length || !state.patterns || !state.patterns.length) state.patterns = normVault({ patterns: rPatterns }).patterns;
+          else dirtyAppState = true;
+        }
         else dirtyAppState = true;
       } else if (!ar.data) {
         dirtyAppState = true; // no remote row yet — create it
@@ -530,9 +619,16 @@
         if (!error) dirtyEntries.delete(id);
       }
       if (dirtyAppState) {
-        const { data, error } = await sb.from("app_state").upsert(
-          { user_id: user.id, terms: state.terms, settings: state.settings, updated_at: nowISO() }, { onConflict: "user_id" }
+        let { data, error } = await sb.from("app_state").upsert(
+          { user_id: user.id, terms: state.terms, patterns: state.patterns, settings: state.settings, updated_at: nowISO() }, { onConflict: "user_id" }
         ).select().maybeSingle();
+        // a project whose `patterns` column isn't migrated yet must not lose terms/settings sync
+        if (error && /patterns/i.test(String(error.message || ""))) {
+          console.warn("[pilsa] app_state.patterns column missing — run migration 0002");
+          ({ data, error } = await sb.from("app_state").upsert(
+            { user_id: user.id, terms: state.terms, settings: state.settings, updated_at: nowISO() }, { onConflict: "user_id" }
+          ).select().maybeSingle());
+        }
         if (!error) { dirtyAppState = false; if (data) state.__appUpdatedAt = data.updated_at; }
       }
       setSync(dirtyEntries.size || dirtyAppState ? "offline" : "ok");
@@ -561,7 +657,7 @@
       const headers = { "Content-Type": "application/json", apikey: SUPABASE_KEY, Authorization: `Bearer ${tok}`, Prefer: "resolution=merge-duplicates" };
       const rows = [...dirtyEntries].map(findEntry).filter(Boolean).map(entryToRow);
       if (rows.length) fetch(`${SUPABASE_URL}/rest/v1/entries?on_conflict=id`, { method: "POST", headers, body: JSON.stringify(rows), keepalive: true });
-      if (dirtyAppState) fetch(`${SUPABASE_URL}/rest/v1/app_state?on_conflict=user_id`, { method: "POST", headers, body: JSON.stringify([{ user_id: user.id, terms: state.terms, settings: state.settings, updated_at: nowISO() }]), keepalive: true });
+      if (dirtyAppState) fetch(`${SUPABASE_URL}/rest/v1/app_state?on_conflict=user_id`, { method: "POST", headers, body: JSON.stringify([{ user_id: user.id, terms: state.terms, patterns: state.patterns, settings: state.settings, updated_at: nowISO() }]), keepalive: true });
     } catch (_) {}
   }
   // re-pull from the cloud when the tab regains focus, so a second device
@@ -592,12 +688,16 @@
     [
       "authView","authForm","authEmail","authPassword","authSubmit","authMsg","authSwitch","authNote",
       "app","sidebar","sidebarToggle","wordmark","syncDot","newEntryBtn","searchBtn","wordsBtn","sentencesBtn",
-      "wordsCount","sentencesCount","recentList","exportBtn","importBtn","signOutBtn","importInput","sidebarReopen","main",
+      "wordsCount","sentencesCount","recentList","revisitBlock","revisitList","exportBtn","importBtn","signOutBtn","importInput","sidebarReopen","main",
       "emptyState","emptyNewBtn","entryView","entryDate","entryWeekday","entryStatus","deleteEntryBtn","srcAuthor","srcTitle","srcPage",
       "bodyField","bodyRender","bodyEditWrap","bodyBackdrop","bodyInput","hlToolbar","slashMenu","slashMenuList","bodyHint","interpInput","interpSend","interpRevisions",
       "claudePanel","claudeHead","claudeTitle","claudeChevron","claudeBody","threadList","claudeCompose","claudeInput","claudeSend","claudeWarn","addParagraphBtn","passagesBefore","passagesAfter",
       "reflectView","reflectDate","reflectWeekday","reflectStatus","reflectDeleteBtn","reflectAuthor","reflectTitle",
       "reflectModes","reflectModeDesc","reflectRevCount","reflectBlocks","reflectAddBlock",
+      "reverseView","revDate","revWeekday","revStageBadge","revDeleteBtn","revAuthor","revTitle","revPage",
+      "revSetup","revSetupKo","revSetupTarget","revSetupSave","revSetupCancel",
+      "revWrite","revKo","revAttemptH","revAttemptInput","revSubmit","revWriteMeta","revEditSetup","revPrior","revCompare",
+      "patternsBtn","patternsCount","patternsView","patternsSub","patternsFilter","patternsStarFilter","patternsCats","patternList",
       "wordsView","wordsSub","wordsFilter","wordsSort","wordsGrid","sentencesView","sentencesSub","sentencesFilter","sentenceList",
       "thoughtsBtn","thoughtsCount","thoughtsView","thoughtsSub","thoughtsFilter","thoughtList",
       "projectsBtn","projectsCount","projectsView","projectsSort","projectsFilter","projectsGrid","projectsKindFilter","projectsNewBtn",
@@ -649,10 +749,11 @@
   function renderRoute() {
     if (!user) return;
     const { name } = parseHash();
-    [D.emptyState, D.entryView, D.reflectView, D.wordsView, D.sentencesView, D.thoughtsView, D.projectsView, D.projectDetailView].forEach((v) => (v.hidden = true));
+    [D.emptyState, D.entryView, D.reflectView, D.reverseView, D.wordsView, D.sentencesView, D.thoughtsView, D.patternsView, D.projectsView, D.projectDetailView].forEach((v) => (v.hidden = true));
     D.searchScrim.hidden = true;
-    [D.searchBtn, D.wordsBtn, D.sentencesBtn, D.thoughtsBtn, D.projectsBtn].forEach((b) => b.classList.remove("is-on"));
-    if (name === "words") { D.wordsBtn.classList.add("is-on"); D.wordsView.hidden = false; renderWordsView(); }
+    [D.searchBtn, D.wordsBtn, D.sentencesBtn, D.thoughtsBtn, D.patternsBtn, D.projectsBtn].forEach((b) => b.classList.remove("is-on"));
+    if (name === "patterns") { D.patternsBtn.classList.add("is-on"); D.patternsView.hidden = false; renderPatternsView(); }
+    else if (name === "words") { D.wordsBtn.classList.add("is-on"); D.wordsView.hidden = false; renderWordsView(); }
     else if (name === "sentences") { D.sentencesBtn.classList.add("is-on"); D.sentencesView.hidden = false; renderSentencesView(); }
     else if (name === "thoughts") { D.thoughtsBtn.classList.add("is-on"); D.thoughtsView.hidden = false; renderThoughtsView(); }
     else if (name === "projects" || name === "art") {
@@ -667,7 +768,7 @@
   }
   function showDaily() {
     D.main.scrollTop = 0;
-    if (!state.entries.length) { D.emptyState.hidden = false; D.entryView.hidden = true; D.reflectView.hidden = true; return; }
+    if (!state.entries.length) { D.emptyState.hidden = false; D.entryView.hidden = true; D.reflectView.hidden = true; D.reverseView.hidden = true; return; }
     if (!currentEntry()) {
       let openId = null;
       try { openId = localStorage.getItem(lastOpenKey()); } catch (_) {}
@@ -677,12 +778,23 @@
     if (!e) { D.emptyState.hidden = false; return; }
     D.emptyState.hidden = true;
     if (e.kind === "reflection") {
-      D.entryView.hidden = true; D.reflectView.hidden = false;
+      D.entryView.hidden = true; D.reverseView.hidden = true; D.reflectView.hidden = false;
+      clearReverseDom();
       renderReflectEntry();
+    } else if (e.kind === "reverse") {
+      D.entryView.hidden = true; D.reflectView.hidden = true; D.reverseView.hidden = false;
+      renderReverseEntry();
     } else {
-      D.reflectView.hidden = true; D.entryView.hidden = false;
+      D.reflectView.hidden = true; D.reverseView.hidden = true; D.entryView.hidden = false;
+      clearReverseDom();
       renderEntry();
     }
+  }
+  // Nothing of a 역번역 drill — least of all the target — stays behind in the DOM.
+  function clearReverseDom() {
+    D.revSetupKo.value = ""; D.revSetupTarget.value = "";
+    D.revKo.textContent = ""; D.revAttemptInput.value = "";
+    D.revCompare.innerHTML = ""; D.revPrior.innerHTML = "";
   }
 
   /* ─────────────────────── DAILY: ENTRY ─────────────────────── */
@@ -699,7 +811,7 @@
       if (typeof presetSource.page === "string") e.source.page = presetSource.page;
     }
     state.entries.push(e);
-    currentId = e.id; activeThreadId = null;
+    currentId = e.id; activeThreadId = null; revModeId = null;
     if (e.kind === "transcription" && Array.isArray(e.passages) && e.passages.length) {
       loadPassageIntoTopLevel(e, e.passages[0].id);
     } else currentPassageId = null;
@@ -709,7 +821,8 @@
     renderSidebarCounts();
     autoCloseSidebarIfNarrow();
     // Focus where it makes sense: if a project was pre-set, jump into the body so the user starts writing
-    if (presetSource && (presetSource.author || presetSource.title)) {
+    if (kind === "reverse") setTimeout(() => { try { D.revSetupKo.focus(); } catch (_) {} }, 0);
+    else if (presetSource && (presetSource.author || presetSource.title)) {
       setTimeout(() => {
         try {
           if (kind === "reflection") { const ta = D.reflectBlocks.querySelector(".rb-user-input"); if (ta) ta.focus(); }
@@ -732,17 +845,23 @@
         <span class="doc-picker-name">사유</span>
         <span class="doc-picker-desc">내 생각을 직접 적고 다듬습니다.<br/>영어·한국어 자유. Claude가 교정·지적해 줍니다.</span>
         <span class="doc-picker-kbd">⌘2</span>
+      </button>
+      <button type="button" class="doc-picker-card" data-kind="reverse">
+        <span class="doc-picker-name">역번역</span>
+        <span class="doc-picker-desc">내 한국어 원문에서 영어를 다시 만듭니다.<br/>정답지를 가린 채 쓰고, 제출하면 나란히 대조합니다.</span>
+        <span class="doc-picker-kbd">⌘3</span>
       </button>`;
     function pick(kind) { closeModal(); document.removeEventListener("keydown", onKey, true); newEntry(kind); }
     wrap.addEventListener("click", (ev) => {
       const card = ev.target.closest(".doc-picker-card");
       if (card) pick(card.dataset.kind);
     });
+    const PICK_KEYS = { 1: "transcription", 2: "reflection", 3: "reverse" };
     function onKey(ev) {
       if (D.modalScrim.hidden) { document.removeEventListener("keydown", onKey, true); return; }
-      if ((ev.metaKey || ev.ctrlKey) && (ev.key === "1" || ev.key === "2")) {
+      if ((ev.metaKey || ev.ctrlKey) && PICK_KEYS[ev.key]) {
         ev.preventDefault();
-        pick(ev.key === "1" ? "transcription" : "reflection");
+        pick(PICK_KEYS[ev.key]);
       }
     }
     document.addEventListener("keydown", onKey, true);
@@ -755,7 +874,7 @@
     const prev = currentEntry();
     if (prev) syncTopLevelToPassage(prev);
     if (!findEntry(id)) return;
-    currentId = id; activeThreadId = null; editing = false;
+    currentId = id; activeThreadId = null; editing = false; revModeId = null;
     currentPassageId = null;
     const ne = currentEntry();
     if (ne && ne.kind === "transcription" && Array.isArray(ne.passages) && ne.passages.length) {
@@ -768,14 +887,15 @@
   }
   function deleteCurrentEntry() {
     const e = currentEntry(); if (!e) return;
-    const kindLabel = e.kind === "reflection" ? "사유" : "필사";
+    const kindLabel = kindLabelOf(e.kind);
     const label = srcLabel(e) || e.date;
     if (!confirm(`이 ${kindLabel}을(를) 삭제할까요?\n\n${label}\n\n되돌릴 수 없습니다.`)) return;
     state.entries = state.entries.filter((x) => x.id !== e.id);
     deletedEntries.add(e.id); dirtyEntries.delete(e.id);
     pruneEntryFromTerms(e.id);
     const nx = orderedEntries()[0];
-    currentId = nx ? nx.id : null;
+    currentId = nx ? nx.id : null; revModeId = null;
+    revDrafts.delete(e.id);
     scheduleSync(); cacheLocal();
     renderRecentList(); showDaily(); renderSidebarCounts();
     toast(`${kindLabel}을 삭제했습니다`);
@@ -1032,6 +1152,403 @@
     } finally {
       aiBusy = Math.max(0, aiBusy - 1);
     }
+  }
+
+  /* ─────────────────────── 역번역 (reverse translation) ─────────────────────── */
+  /* ── word-level diff — LCS over whitespace-split tokens (no dependencies) ── */
+  const WD_CELL_CAP = 1200000; // ~1.2M cells; beyond that we skip the diff rather than stall
+  function wdTokens(s) { return String(s == null ? "" : s).split(/(\s+)/).filter((t) => t !== ""); }
+  function wdKey(t) {
+    if (/^\s+$/.test(t)) return " ";
+    const k = t.toLowerCase().replace(/[^a-z0-9'’]/g, "");
+    return k || t.toLowerCase();
+  }
+  function wordDiff(aStr, bStr) {
+    const a = wdTokens(aStr), b = wdTokens(bStr);
+    const left = new Array(a.length).fill(false), right = new Array(b.length).fill(false);
+    const n = a.length, m = b.length;
+    if (!n || !m || n * m > WD_CELL_CAP) {
+      return { a, b, left, right, changes: 0, skipped: n * m > WD_CELL_CAP };
+    }
+    const A = a.map(wdKey), B = b.map(wdKey);
+    const w = m + 1;
+    const dp = new Uint32Array((n + 1) * w);
+    for (let i = n - 1; i >= 0; i--) {
+      for (let j = m - 1; j >= 0; j--) {
+        dp[i * w + j] = A[i] === B[j]
+          ? dp[(i + 1) * w + (j + 1)] + 1
+          : Math.max(dp[(i + 1) * w + j], dp[i * w + (j + 1)]);
+      }
+    }
+    let i = 0, j = 0, changes = 0;
+    while (i < n && j < m) {
+      if (A[i] === B[j]) { i++; j++; }
+      else if (dp[(i + 1) * w + j] >= dp[i * w + (j + 1)]) { if (A[i] !== " ") { left[i] = true; changes++; } i++; }
+      else { if (B[j] !== " ") { right[j] = true; changes++; } j++; }
+    }
+    while (i < n) { if (A[i] !== " ") { left[i] = true; changes++; } i++; }
+    while (j < m) { if (B[j] !== " ") { right[j] = true; changes++; } j++; }
+    return { a, b, left, right, changes, skipped: false };
+  }
+  function wdRender(tokens, flags, cls) {
+    let out = "";
+    for (let k = 0; k < tokens.length; k++) {
+      out += flags[k] ? `<span class="${cls}">${esc(tokens[k])}</span>` : esc(tokens[k]);
+    }
+    return out;
+  }
+
+  /* ── sentence context: find a fragment in its source text and return the whole
+        sentence around it, plus where the fragment sits inside that sentence ── */
+  function revLocate(hay, frag) {
+    const H = String(hay == null ? "" : hay), F = String(frag == null ? "" : frag).trim();
+    if (!H || !F) return null;
+    let i = H.indexOf(F), len = F.length;
+    if (i < 0) { i = H.toLowerCase().indexOf(F.toLowerCase()); }
+    if (i < 0) {
+      // the model may have normalized whitespace when quoting — match word-by-word
+      const words = F.split(/\s+/).filter(Boolean).map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+      if (!words.length) return null;
+      const m = new RegExp(words.join("\\s+"), "i").exec(H);
+      if (!m) return null;
+      i = m.index; len = m[0].length;
+    }
+    const s = sentenceAround(H, i, i + len);
+    const raw = H.slice(s.start, s.end);
+    const lead = raw.length - raw.replace(/^\s+/, "").length; // sentenceAround trims
+    const at = i - s.start - lead;
+    if (at < 0 || at + len > s.text.length) return { sentence: s.text, at: null, len: 0 };
+    return { sentence: s.text, at, len };
+  }
+  function revMarkSentence(loc, cls) {
+    if (!loc) return "";
+    if (loc.at == null) return esc(loc.sentence);
+    return esc(loc.sentence.slice(0, loc.at)) +
+      `<span class="${cls}">${esc(loc.sentence.slice(loc.at, loc.at + loc.len))}</span>` +
+      esc(loc.sentence.slice(loc.at + loc.len));
+  }
+  const revNormForMatch = (s) => String(s || "").toLowerCase().replace(/[\s]+/g, " ").replace(/[“”]/g, '"').replace(/[‘’]/g, "'").trim();
+
+  /* ── pattern note (나의 패턴) ── */
+  const patKey = (mine, frag) =>
+    String(mine || "").toLowerCase().replace(/\s+/g, " ").trim() + " ⇒ " + String(frag || "").toLowerCase().replace(/\s+/g, " ").trim();
+  function findPattern(key) {
+    if (!Array.isArray(state.patterns)) state.patterns = [];
+    return state.patterns.find((p) => patKey(p.mine, p.targetFrag) === key) || null;
+  }
+  // Same mine→targetFrag pair filed again = a repeated failure, so bump hits instead of duplicating.
+  function filePattern(diff, entryId) {
+    if (!Array.isArray(state.patterns)) state.patterns = [];
+    const key = patKey(diff.mine, diff.targetFrag);
+    const hit = findPattern(key);
+    if (hit) {
+      hit.hits += 1;
+      if (diff.note && !hit.note) hit.note = diff.note;
+      return "hit";
+    }
+    state.patterns.push(normPattern({
+      mine: diff.mine, targetFrag: diff.targetFrag, category: diff.category, note: diff.note,
+      starred: false, sourceEntryId: entryId || "", createdAt: nowISO(), hits: 1,
+    }));
+    return "new";
+  }
+
+  /* ── reverse entry view ── */
+  let revMode = "write";          // "setup" | "write" | "compare"
+  let revModeId = null;           // entry id revMode belongs to
+  let revShownAttemptId = null;   // attempt rendered in the compare panel
+  let revBusy = false;
+  const revDrafts = new Map();    // session-only drafts, keyed by entry id
+
+  function reverseOf(e) {
+    if (!e.reverse || typeof e.reverse !== "object") e.reverse = normReverse(null);
+    return e.reverse;
+  }
+  function revIsDue(e) {
+    if (e.kind !== "reverse") return false;
+    const rv = e.reverse;
+    return !!(rv && rv.nextRevisit && rv.nextRevisit <= todayISO());
+  }
+  function revAdvanceStage(rv) {
+    if (rv.stage === "new") { rv.stage = "d3"; rv.nextRevisit = plusDaysISO(3); }
+    else if (rv.stage === "d3") { rv.stage = "d14"; rv.nextRevisit = plusDaysISO(14); }
+    else { rv.stage = "done"; rv.nextRevisit = null; }
+  }
+
+  function renderReverseEntry() {
+    const e = currentEntry(); if (!e || e.kind !== "reverse") return;
+    const rv = reverseOf(e);
+
+    if (revModeId !== e.id) { revModeId = e.id; revMode = "write"; revShownAttemptId = null; }
+    if (!rv.koSource.trim() || !rv.target.trim()) revMode = "setup";
+
+    D.revDate.value = e.date;
+    D.revWeekday.textContent = weekdayOf(e.date) ? "· " + weekdayOf(e.date) : "";
+    D.revAuthor.value = e.source.author; D.revTitle.value = e.source.title; D.revPage.value = e.source.page;
+    D.revStageBadge.hidden = false;
+    D.revStageBadge.textContent = REV_STAGE_LABEL[rv.stage] || "1차";
+    D.revStageBadge.className = "rev-stage-badge stage-" + rv.stage + (revIsDue(e) ? " is-due" : "");
+
+    D.revSetup.hidden = revMode !== "setup";
+    D.revWrite.hidden = revMode !== "write";
+    D.revCompare.hidden = revMode !== "compare";
+
+    if (revMode === "setup") {
+      D.revSetupKo.value = rv.koSource;
+      D.revSetupTarget.value = rv.target;   // the one moment the target is allowed on screen
+      autoGrow(D.revSetupKo, 600); autoGrow(D.revSetupTarget, 600);
+      D.revSetupCancel.hidden = !(rv.koSource.trim() && rv.target.trim());
+    } else {
+      // leave nothing behind: the target must not be readable from the DOM in state A
+      D.revSetupKo.value = ""; D.revSetupTarget.value = "";
+    }
+
+    if (revMode === "write") {
+      D.revKo.textContent = rv.koSource;
+      D.revAttemptH.textContent = `영어로 옮기기 · ${rv.attempts.length + 1}번째 시도`;
+      D.revAttemptInput.value = revDrafts.get(e.id) || "";
+      autoGrow(D.revAttemptInput, 900);
+      D.revSubmit.disabled = revBusy;
+      const bits = [];
+      if (rv.attempts.length) bits.push(`지금까지 ${rv.attempts.length}번 제출`);
+      if (rv.nextRevisit) bits.push(revIsDue(e) ? "오늘 재시도" : `다음 재시도 ${fmtDate(rv.nextRevisit)}`);
+      else if (rv.stage === "done") bits.push("주기 완료");
+      D.revWriteMeta.textContent = bits.join(" · ");
+      renderRevPrior(e);
+    } else {
+      D.revKo.textContent = "";
+      D.revPrior.innerHTML = "";
+    }
+
+    if (revMode === "compare") {
+      const at = rv.attempts.find((a) => a.id === revShownAttemptId) || rv.attempts[rv.attempts.length - 1] || null;
+      if (!at) { revMode = "write"; renderReverseEntry(); return; }
+      revShownAttemptId = at.id;
+      renderReverseCompare(e, at);
+    } else {
+      D.revCompare.innerHTML = "";
+    }
+  }
+
+  function renderRevPrior(e) {
+    const rv = reverseOf(e);
+    if (!rv.attempts.length) { D.revPrior.innerHTML = ""; return; }
+    const rows = rv.attempts.map((a, i) => {
+      const n = a.analysis ? a.analysis.diffs.length : null;
+      // read-only: fragments only, never whole target sentences — state A must stay covered
+      const an = a.analysis
+        ? `<details class="rev-prior-analysis"><summary>분석 보기${n != null ? ` · 차이 ${n}개` : ""}</summary>${revAnalysisHtml(a.analysis, null)}</details>`
+        : `<div class="rev-prior-noan">— 분석 없음</div>`;
+      return `<div class="rev-prior-item">
+        <div class="rev-prior-h">${i + 1}번째 시도 · ${esc(fmtDate(a.timestamp))} ${esc(String(a.timestamp).slice(11, 16))}</div>
+        <div class="rev-prior-text">${esc(a.text)}</div>
+        ${an}
+        <button type="button" class="rev-btn rev-btn--ghost" data-rev-open="${escAttr(a.id)}">이 시도 대조 보기</button>
+      </div>`;
+    }).join("");
+    D.revPrior.innerHTML = `<details class="rev-prior-wrap"><summary>이전 시도 ${rv.attempts.length}개 보기</summary>${rows}</details>`;
+  }
+
+  function revCatBadge(cat) {
+    return `<span class="cat-badge cat-${esc(cat)}">${esc(REV_CAT_LABEL[cat] || cat)}</span>`;
+  }
+  // `ctx` = { entryId, attemptText, target } → live compare card (sentence context +
+  // 담기 picker + 필사 box). `null` → read-only fragment pairs for the prior-attempt list.
+  function revAnalysisHtml(an, ctx) {
+    if (!an) return "";
+    let html = "", unfiled = 0;
+    if (an.verdict) html += `<div class="rev-verdict">${esc(an.verdict)}</div>`;
+    if (an.diffs.length) {
+      html += `<div class="rev-diff-list">` + an.diffs.map((d, i) => {
+        const filed = ctx ? findPattern(patKey(d.mine, d.targetFrag)) : null;
+        if (ctx && !filed) unfiled++;
+        const pick = !ctx ? ""
+          : filed
+            ? `<span class="rev-diff-filed" title="이미 나의 패턴에 있습니다">담김 · ${filed.hits}회</span>`
+            : `<label class="rev-diff-pick"><input type="checkbox" data-rev-diff="${i}" checked /><span>담기</span></label>`;
+
+        let pair, practice = "";
+        if (ctx) {
+          // whole sentence, with only the diverging part coloured
+          const mLoc = revLocate(ctx.attemptText, d.mine);
+          const tLoc = revLocate(ctx.target, d.targetFrag);
+          const mineHtml = mLoc ? revMarkSentence(mLoc, "rev-x") : `<span class="rev-x">${esc(d.mine)}</span>`;
+          const tgtHtml = tLoc ? revMarkSentence(tLoc, "rev-o") : `<span class="rev-o">${esc(d.targetFrag)}</span>`;
+          pair = `<div class="rev-diff-pair">
+            <div class="rev-sent-row"><span class="rev-diff-lbl">내</span><span class="rev-sent">${mineHtml || "<i>—</i>"}</span></div>
+            <div class="rev-sent-row"><span class="rev-diff-lbl">목표</span><span class="rev-sent">${tgtHtml || "<i>—</i>"}</span></div>
+          </div>`;
+          const model = tLoc ? tLoc.sentence : d.targetFrag;
+          const done = !!d.practice.trim() && revNormForMatch(d.practice) === revNormForMatch(model);
+          practice = `<div class="rev-practice${done ? " is-done" : ""}" data-model="${escAttr(model)}">
+            <div class="rev-practice-h">맞는 문장 필사${done ? `<span class="rev-practice-ok">✓ 일치</span>` : ""}</div>
+            <textarea class="rev-practice-input" data-rev-practice="${i}" spellcheck="false"
+              placeholder="위 목표 문장을 그대로 옮겨 적습니다.">${esc(d.practice)}</textarea>
+          </div>`;
+        } else {
+          pair = `<div class="rev-diff-pair">
+            <div class="rev-sent-row"><span class="rev-diff-lbl">내</span><span class="rev-frag rev-x">${esc(d.mine) || "—"}</span></div>
+            <div class="rev-sent-row"><span class="rev-diff-lbl">목표</span><span class="rev-frag rev-o">${esc(d.targetFrag) || "—"}</span></div>
+          </div>`;
+        }
+        return `<div class="rev-diff">
+          <div class="rev-diff-top">${revCatBadge(d.category)}${pick}</div>
+          ${pair}
+          ${d.note ? `<div class="rev-diff-note">${esc(d.note)}</div>` : ""}
+          ${practice}
+        </div>`;
+      }).join("") + `</div>`;
+    } else {
+      html += `<div class="rev-none">— 유의미한 차이가 없습니다.</div>`;
+    }
+    if (an.better.length) {
+      html += `<div class="rev-better-h">내 쪽이 나은 지점</div><ul class="rev-better">` +
+        an.better.map((b) => `<li>${esc(b)}</li>`).join("") + `</ul>`;
+    }
+    if (unfiled) {
+      html += `<div class="rev-foot"><button type="button" class="rev-btn rev-btn--primary" id="revFileBtn">분석을 패턴 노트에 담기</button></div>`;
+    } else if (ctx && an.diffs.length) {
+      html += `<div class="rev-foot"><span class="rev-meta">이 분석의 갈림은 모두 「나의 패턴」에 있습니다</span></div>`;
+    }
+    return html;
+  }
+
+  function renderReverseCompare(e, at) {
+    const rv = reverseOf(e);
+    const idx = rv.attempts.findIndex((a) => a.id === at.id);
+    const d = wordDiff(at.text, rv.target);
+    // improvement is only meaningful between two analyzed attempts
+    let delta = "";
+    const prev = idx > 0 ? rv.attempts[idx - 1] : null;
+    if (prev && prev.analysis && at.analysis) {
+      const diffNow = at.analysis.diffs.length, diffPrev = prev.analysis.diffs.length;
+      delta = diffNow < diffPrev ? `이전보다 지적 ${diffPrev - diffNow}개 줄었습니다`
+        : diffNow > diffPrev ? `이전보다 지적 ${diffNow - diffPrev}개 늘었습니다`
+        : "이전과 지적 수가 같습니다";
+    }
+    const analysis = at.analysis
+      ? revAnalysisHtml(at.analysis, { entryId: e.id, attemptText: at.text, target: rv.target })
+      : revBusy
+        ? `<div class="rev-analyzing">Claude가 대조 분석 중…</div>`
+        : `<div class="rev-analyzing is-failed">분석이 아직 없습니다.<button type="button" class="rev-btn rev-btn--ghost" id="revRetryBtn">다시 분석</button></div>`;
+
+    D.revCompare.innerHTML = `
+      <div class="rev-cmp-head">
+        <span class="rev-cmp-n">${idx + 1}번째 시도</span>
+        <span class="rev-cmp-ts">${esc(fmtDate(at.timestamp))} ${esc(String(at.timestamp).slice(11, 16))}</span>
+        ${delta ? `<span class="rev-cmp-delta">${esc(delta)}</span>` : ""}
+        <button type="button" class="rev-btn rev-btn--ghost" id="revBackToWrite">다시 쓰기</button>
+      </div>
+      <div class="rev-cols">
+        <div class="rev-col">
+          <div class="rev-col-h">내 시도</div>
+          <div class="rev-col-body">${wdRender(d.a, d.left, "wd-del")}</div>
+        </div>
+        <div class="rev-col">
+          <div class="rev-col-h">목표 영문</div>
+          <div class="rev-col-body">${wdRender(d.b, d.right, "wd-ins")}</div>
+        </div>
+      </div>
+      ${d.skipped ? `<div class="rev-note-small">문단이 너무 길어 단어 대조는 건너뛰었습니다.</div>` : `<div class="rev-note-small">단어 차이 ${d.changes}개</div>`}
+      <div class="rev-analysis">${analysis}</div>`;
+    D.revCompare.querySelectorAll(".rev-practice-input").forEach((ta) => autoGrow(ta, 260));
+  }
+
+  function saveReverseSetup() {
+    const e = currentEntry(); if (!e || e.kind !== "reverse") return;
+    const rv = reverseOf(e);
+    const ko = D.revSetupKo.value.trim(), tg = D.revSetupTarget.value.trim();
+    if (!ko) { D.revSetupKo.focus(); toast("한국어 원문을 붙여넣어 주세요"); return; }
+    if (!tg) { D.revSetupTarget.focus(); toast("목표 영문을 붙여넣어 주세요"); return; }
+    rv.koSource = ko; rv.target = tg;
+    touchEntry(e);
+    revMode = "write";
+    renderReverseEntry();
+    renderRecentList();
+    setTimeout(() => { try { D.revAttemptInput.focus(); } catch (_) {} }, 0);
+  }
+
+  async function submitReverseAttempt() {
+    if (revBusy) return;
+    const e = currentEntry(); if (!e || e.kind !== "reverse") return;
+    const rv = reverseOf(e);
+    const text = D.revAttemptInput.value.trim();
+    if (!text) { D.revAttemptInput.focus(); toast("먼저 영어로 옮겨 적어 주세요"); return; }
+    if (!rv.target.trim()) { revMode = "setup"; renderReverseEntry(); return; }
+
+    // append-only: the attempt is recorded before Claude is called, and never rewritten
+    const at = normRevAttempt({ id: uid(), timestamp: nowISO(), text, analysis: null });
+    rv.attempts.push(at);
+    revAdvanceStage(rv);
+    revDrafts.delete(e.id);
+    touchEntry(e);
+
+    revBusy = true;
+    revShownAttemptId = at.id;
+    revMode = "compare";
+    renderReverseEntry();
+    renderRecentList(); renderSidebarCounts();
+    try { D.revCompare.scrollIntoView({ behavior: "smooth", block: "start" }); } catch (_) {}
+
+    await runReverseAnalysis(e, at);
+  }
+
+  async function runReverseAnalysis(e, at) {
+    const rv = reverseOf(e);
+    revBusy = true;
+    aiBusy++; // keep the 20s auto-pull from swapping state.entries mid-call
+    if (revMode === "compare" && revShownAttemptId === at.id) renderReverseCompare(e, at);
+    try {
+      const { data: sess } = await sb.auth.getSession();
+      const tok = sess && sess.session ? sess.session.access_token : null;
+      if (!tok) throw new Error("로그인이 필요합니다");
+      const prior = rv.attempts.filter((a) => a.id !== at.id).map((a) => a.text);
+      const resp = await fetch(CLAUDE_FN, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", apikey: SUPABASE_KEY, Authorization: `Bearer ${tok}` },
+        body: JSON.stringify({
+          reverse: true,
+          koSource: rv.koSource, target: rv.target, attempt: at.text, priorAttempts: prior,
+          context: { author: e.source.author || "", title: e.source.title || "", page: e.source.page || "" },
+        }),
+      });
+      const out = await resp.json().catch(() => ({}));
+      if (!resp.ok || out.error) throw new Error((out && out.error) ? out.error : `요청 실패 (${resp.status})`);
+      at.analysis = normRevAnalysis(out.reverse || {});
+      touchEntry(e);
+      toast("대조 분석 완료");
+    } catch (err) {
+      toast("Claude 호출 실패 — " + (err.message || String(err)));
+    } finally {
+      revBusy = false;
+      aiBusy = Math.max(0, aiBusy - 1);
+      if (currentId === e.id && revMode === "compare") renderReverseCompare(e, at);
+      else if (currentId === e.id) renderReverseEntry();
+    }
+  }
+
+  function shownAttempt() {
+    const e = currentEntry(); if (!e || e.kind !== "reverse") return null;
+    return reverseOf(e).attempts.find((a) => a.id === revShownAttemptId) || null;
+  }
+  function fileAnalysisPatterns() {
+    const e = currentEntry(); if (!e || e.kind !== "reverse") return;
+    const at = shownAttempt();
+    if (!at || !at.analysis) return;
+    const picked = [...D.revCompare.querySelectorAll("input[data-rev-diff]")]
+      .filter((c) => c.checked)
+      .map((c) => at.analysis.diffs[+c.dataset.revDiff])
+      .filter(Boolean);
+    if (!picked.length) { toast("담을 항목을 골라 주세요"); return; }
+    let added = 0, bumped = 0;
+    for (const d of picked) { if (filePattern(d, e.id) === "new") added++; else bumped++; }
+    touchAppState();
+    renderReverseCompare(e, at);
+    renderSidebarCounts();
+    const parts = [];
+    if (added) parts.push(`${added}개 담음`);
+    if (bumped) parts.push(`${bumped}개는 반복 — 횟수 올림`);
+    toast("나의 패턴 · " + parts.join(" · "));
   }
 
   /* ── body: read-mode rendering ── */
@@ -1363,7 +1880,8 @@
   /* ── interpretation ── */
   let interpSnapshot = "";
   function captureInterpCorrection() {
-    const e = currentEntry(); if (!e) return;
+    const e = currentEntry();
+    if (!e || e.kind !== "transcription") return; // 사유·역번역 have no interpretation field
     const before = interpSnapshot, after = D.interpInput.value;
     if (after !== e.interpretation) { e.interpretation = after; touchEntry(e); }
     if (before.trim() !== "" && after !== before) {
@@ -1636,18 +2154,31 @@
   }
 
   /* ─────────────────────── RECENT LIST + COUNTS ─────────────────────── */
+  function recentItemHtml(e, today) {
+    const dot = e.date === today ? '<span class="recent-dot"></span>' : "";
+    const lbl = srcLabel(e) || "제목 없음";
+    const stage = e.kind === "reverse"
+      ? `<span class="recent-stage stage-${(e.reverse && e.reverse.stage) || "new"}">${esc(REV_STAGE_LABEL[(e.reverse && e.reverse.stage) || "new"])}</span>` : "";
+    return `<li><button type="button" class="recent-item${e.id === currentId && parseHash().name === "daily" ? " is-active" : ""}" data-id="${escAttr(e.id)}">
+      <span class="recent-item-date">${dot}${esc(fmtMD(e.date))}${stage}</span>
+      <span class="recent-item-src">${esc(lbl)}</span>
+    </button></li>`;
+  }
   function renderRecentList() {
     const items = orderedEntries();
-    if (!items.length) { D.recentList.innerHTML = '<li class="recent-empty">아직 없습니다</li>'; return; }
+    if (!items.length) { D.recentList.innerHTML = '<li class="recent-empty">아직 없습니다</li>'; renderRevisitList(); return; }
     const today = todayISO();
-    D.recentList.innerHTML = items.map((e) => {
-      const dot = e.date === today ? '<span class="recent-dot"></span>' : "";
-      const lbl = srcLabel(e) || "제목 없음";
-      return `<li><button type="button" class="recent-item${e.id === currentId && parseHash().name === "daily" ? " is-active" : ""}" data-id="${escAttr(e.id)}">
-        <span class="recent-item-date">${dot}${esc(fmtMD(e.date))}</span>
-        <span class="recent-item-src">${esc(lbl)}</span>
-      </button></li>`;
-    }).join("");
+    D.recentList.innerHTML = items.map((e) => recentItemHtml(e, today)).join("");
+    renderRevisitList();
+  }
+  // 오늘 재시도 — only rendered when something is actually due
+  function renderRevisitList() {
+    const due = state.entries.filter(revIsDue)
+      .sort((a, b) => String(a.reverse.nextRevisit).localeCompare(String(b.reverse.nextRevisit)));
+    D.revisitBlock.hidden = !due.length;
+    if (!due.length) { D.revisitList.innerHTML = ""; return; }
+    const today = todayISO();
+    D.revisitList.innerHTML = due.map((e) => recentItemHtml(e, today)).join("");
   }
   function renderSidebarCounts() {
     D.wordsCount.textContent = state.terms.length ? String(state.terms.length) : "";
@@ -1656,10 +2187,13 @@
     for (const e of state.entries) {
       projectKeys.add(projectKey(e));
       if (e.kind === "reflection") { tc++; continue; }
+      if (e.kind === "reverse") continue; // 역번역 doesn't feed 나의 문장
       for (const t of e.threads) if (t.anchorText && t.messages.length) sc++;
     }
+    const pc = Array.isArray(state.patterns) ? state.patterns.length : 0;
     D.sentencesCount.textContent = sc ? String(sc) : "";
     D.thoughtsCount.textContent = tc ? String(tc) : "";
+    D.patternsCount.textContent = pc ? String(pc) : "";
     D.projectsCount.textContent = projectKeys.size ? String(projectKeys.size) : "";
   }
 
@@ -1720,7 +2254,7 @@
   function gatherSentences() {
     const out = [];
     for (const e of state.entries) {
-      if (e.kind === "reflection") continue;
+      if (e.kind !== "transcription") continue;
       for (const t of e.threads) {
         if (!t.anchorText || !t.messages.length) continue;
         out.push({ entry: e, thread: t, text: t.anchorText, date: e.date, createdAt: t.createdAt });
@@ -1781,13 +2315,14 @@
       let p = map.get(key);
       if (!p) {
         const [a, t] = key.split("|");
-        p = { key, author: a, title: t, entries: [], lastUpdated: 0, transcriptionCount: 0, reflectionCount: 0 };
+        p = { key, author: a, title: t, entries: [], lastUpdated: 0, transcriptionCount: 0, reflectionCount: 0, reverseCount: 0 };
         map.set(key, p);
       }
       p.entries.push(e);
       const u = +new Date(e.updatedAt || e.createdAt || 0);
       if (u > p.lastUpdated) p.lastUpdated = u;
       if (e.kind === "reflection") p.reflectionCount++;
+      else if (e.kind === "reverse") p.reverseCount++;
       else p.transcriptionCount++;
     }
     return Array.from(map.values());
@@ -1820,6 +2355,8 @@
         const blocks = (e.reflection && Array.isArray(e.reflection.blocks)) ? e.reflection.blocks : [];
         const lastUser = [...blocks].reverse().find((b) => b.kind === "user" && b.text && b.text.trim());
         t = lastUser ? lastUser.text : (e.reflection && e.reflection.body) || "";
+      } else if (e.kind === "reverse") {
+        t = (e.reverse && e.reverse.koSource) || "";   // never the target — that's the answer key
       } else t = e.body;
       if (t && t.trim()) return t.trim().slice(0, 220);
     }
@@ -1834,6 +2371,7 @@
     let list = getProjects();
     if (projectsState.kind === "transcription") list = list.filter((p) => p.transcriptionCount > 0);
     else if (projectsState.kind === "reflection") list = list.filter((p) => p.reflectionCount > 0);
+    else if (projectsState.kind === "reverse") list = list.filter((p) => p.reverseCount > 0);
     if (f) list = list.filter((p) => projectTitle(p).toLowerCase().includes(f) || projectExcerpt(p).toLowerCase().includes(f));
     if (projectsState.sort === "name") list.sort((a, b) => projectTitle(a).localeCompare(projectTitle(b), "ko"));
     else if (projectsState.sort === "count") list.sort((a, b) => b.entries.length - a.entries.length);
@@ -1861,6 +2399,7 @@
           <span>${total}개</span>
           ${p.transcriptionCount ? `<span class="dot-sep">·</span><span>필사 ${p.transcriptionCount}</span>` : ""}
           ${p.reflectionCount ? `<span class="dot-sep">·</span><span>사유 ${p.reflectionCount}</span>` : ""}
+          ${p.reverseCount ? `<span class="dot-sep">·</span><span>역번역 ${p.reverseCount}</span>` : ""}
           ${ago ? `<span class="dot-sep">·</span><span>${esc(ago)} 업데이트됨</span>` : ""}
         </div>
       </button>`;
@@ -1879,13 +2418,15 @@
   }
   function renderProjectArchive(p, to) {
     const unpub = new Set(state.settings.unpublishedIds || []);
-    const list = [...p.entries].sort((a, b) =>
+    // 역번역 is a drill, not a piece of writing — it never enters the archive
+    const list = p.entries.filter((e) => e.kind !== "reverse").sort((a, b) =>
       a.date.localeCompare(b.date) || String(a.createdAt).localeCompare(String(b.createdAt)));
     const title = projectTitle(p);
     const ago = humanAgo(p.lastUpdated);
-    const meta = `${p.entries.length}개` +
+    const meta = `${list.length}개` +
       (p.transcriptionCount ? ` · 필사 ${p.transcriptionCount}` : "") +
       (p.reflectionCount ? ` · 사유 ${p.reflectionCount}` : "") +
+      (p.reverseCount ? ` · 역번역 ${p.reverseCount} (아카이브 제외)` : "") +
       (ago ? ` · ${ago} 업데이트됨` : "");
     let html = `<div class="art-frontis">
       <div class="ft-mark">${esc(title)}</div>
@@ -1893,7 +2434,10 @@
       ${state.settings.curatorNote ? `<div class="ft-curator">${esc(state.settings.curatorNote)}</div>` : ""}
       <div class="ft-rule"></div>
     </div>`;
-    if (!list.length) { html += `<div class="art-empty">— 아직 비어 있습니다 —</div>`; to.innerHTML = html; return; }
+    if (!list.length) {
+      html += `<div class="art-empty">${p.reverseCount ? "— 역번역 문서는 아카이브에 담기지 않습니다 —" : "— 아직 비어 있습니다 —"}</div>`;
+      to.innerHTML = html; return;
+    }
     list.forEach((e, idx) => {
       const isUn = unpub.has(e.id);
       const num = list.length <= 600 ? toRoman(idx + 1) : String(idx + 1);
@@ -1948,6 +2492,10 @@
         <button type="button" class="doc-picker-card" data-kind="reflection">
           <span class="doc-picker-name">사유</span>
           <span class="doc-picker-desc">내 생각을 직접 적고 다듬습니다.</span>
+        </button>
+        <button type="button" class="doc-picker-card" data-kind="reverse">
+          <span class="doc-picker-name">역번역</span>
+          <span class="doc-picker-desc">내 한국어에서 영어를 다시 만듭니다.</span>
         </button>
       </div>`;
     wrap.addEventListener("click", (ev) => {
@@ -2025,6 +2573,58 @@
     }).join("");
   }
 
+  /* ─────────────────────── 나의 패턴 (pattern note) ─────────────────────── */
+  let patternsState = { filter: "", cat: "all", star: "all" };
+  function renderPatternsView() {
+    if (!Array.isArray(state.patterns)) state.patterns = [];
+    const all = state.patterns;
+    D.patternsSub.textContent = `${all.length}개의 패턴 · 역번역 대조에서 담은 것들 — 같은 갈림이 반복되면 횟수가 올라갑니다`;
+    D.patternsFilter.value = patternsState.filter;
+    D.patternsStarFilter.querySelectorAll("button").forEach((b) => b.classList.toggle("is-on", b.dataset.star === patternsState.star));
+
+    const counts = {};
+    for (const c of REV_CATEGORIES) counts[c] = 0;
+    for (const p of all) counts[p.category] = (counts[p.category] || 0) + p.hits;
+    D.patternsCats.innerHTML =
+      `<button type="button" class="pat-cat${patternsState.cat === "all" ? " is-on" : ""}" data-cat="all">전체<span class="pat-cat-n">${all.length}</span></button>` +
+      REV_CATEGORIES.map((c) => {
+        const n = all.filter((p) => p.category === c).length;
+        return `<button type="button" class="pat-cat cat-${c}${patternsState.cat === c ? " is-on" : ""}" data-cat="${c}">${esc(REV_CAT_LABEL[c])}<span class="pat-cat-n">${n}${counts[c] > n ? ` · ${counts[c]}회` : ""}</span></button>`;
+      }).join("");
+
+    const f = patternsState.filter.trim().toLowerCase();
+    let list = all.slice();
+    if (patternsState.cat !== "all") list = list.filter((p) => p.category === patternsState.cat);
+    if (patternsState.star === "starred") list = list.filter((p) => p.starred);
+    if (f) list = list.filter((p) => (p.mine + " " + p.targetFrag + " " + p.note).toLowerCase().includes(f));
+    list.sort((a, b) => (b.starred ? 1 : 0) - (a.starred ? 1 : 0) || b.hits - a.hits || String(b.createdAt).localeCompare(String(a.createdAt)));
+
+    if (!list.length) {
+      D.patternList.innerHTML = `<div class="list-empty">${all.length ? "거른 결과가 없습니다." : "아직 담은 패턴이 없습니다. 역번역 문서를 제출하고, 대조 분석에서 “분석을 패턴 노트에 담기”를 누르면 여기 모입니다."}</div>`;
+      return;
+    }
+    D.patternList.innerHTML = list.map((p) => {
+      const src = findEntry(p.sourceEntryId);
+      return `<div class="pattern-row${p.starred ? " is-starred" : ""}" data-pat="${escAttr(p.id)}">
+        <div class="pattern-row-top">
+          ${revCatBadge(p.category)}
+          ${p.hits > 1 ? `<span class="pattern-hits">${p.hits}회 반복</span>` : ""}
+          <button type="button" class="pattern-star" data-pat-star="${escAttr(p.id)}" title="반복 실패 표시">${p.starred ? "★" : "☆"}</button>
+          <button type="button" class="pattern-del" data-pat-del="${escAttr(p.id)}" title="이 패턴 지우기">삭제</button>
+        </div>
+        <div class="rev-diff-pair">
+          <div class="rev-sent-row"><span class="rev-diff-lbl">내</span><span class="rev-frag rev-x">${esc(p.mine) || "—"}</span></div>
+          <div class="rev-sent-row"><span class="rev-diff-lbl">목표</span><span class="rev-frag rev-o">${esc(p.targetFrag) || "—"}</span></div>
+        </div>
+        ${p.note ? `<div class="pattern-note">${esc(p.note)}</div>` : ""}
+        <div class="pattern-foot">
+          <span>${esc(fmtDate(p.createdAt))}</span>
+          ${src ? `<button type="button" class="pattern-open" data-open-entry="${escAttr(src.id)}">${esc(srcLabel(src) || "이 역번역")} 열기 →</button>` : ""}
+        </div>
+      </div>`;
+    }).join("");
+  }
+
   /* ─────────────────────── SEARCH ─────────────────────── */
   let searchState = { q: "", colors: new Set(), claude: false, from: "", to: "", author: "", cursor: 0, results: [] };
   function openSearch() {
@@ -2054,6 +2654,16 @@
       if (searchState.from && e.date < searchState.from) return false;
       if (searchState.to && e.date > searchState.to) return false;
       if (searchState.author && !e.source.author.toLowerCase().includes(searchState.author.toLowerCase())) return false;
+      if (e.kind === "reverse") {
+        // 역번역 has no highlights and no △ threads — those filters exclude it outright
+        if (searchState.colors.size || searchState.claude) return false;
+        if (!q) return true;
+        const rv = e.reverse || {};
+        // the target is deliberately absent: searching must never surface the answer key
+        const hay = [rv.koSource || "", e.source.author, e.source.title, e.source.page]
+          .concat((rv.attempts || []).map((a) => a.text)).join("\n").toLowerCase();
+        return hay.includes(ql);
+      }
       if (searchState.colors.size && !e.highlights.some((h) => searchState.colors.has(h.type))) return false;
       if (searchState.claude && !e.threads.some((t) => t.messages.length)) return false;
       if (!q) return true;
@@ -2069,18 +2679,23 @@
     const q = searchState.q;
     if (!searchState.results.length) { D.searchResults.innerHTML = `<div class="sr-empty">결과가 없습니다.</div>`; return; }
     D.searchResults.innerHTML = searchState.results.map((e, i) => {
-      let src = q ? null : null;
-      let snip;
-      if (q) {
-        const ql = q.toLowerCase();
-        const fields = [e.body, e.interpretation].concat(e.threads.flatMap((t) => t.messages.map((m) => m.content)));
-        const hit = fields.find((f) => f.toLowerCase().includes(ql)) || e.body || e.interpretation || "";
+      const ql = q.toLowerCase();
+      let snip, colors = "", hasC = "", kindTag = "";
+      if (e.kind === "reverse") {
+        const rv = e.reverse || {};
+        const fields = [rv.koSource || ""].concat((rv.attempts || []).map((a) => a.text)); // never the target
+        const hit = (q && fields.find((f) => f.toLowerCase().includes(ql))) || rv.koSource || "";
         snip = snippet(hit, q);
-      } else snip = snippet(e.body || e.interpretation || "", "");
-      const colors = [...new Set(e.highlights.map((h) => h.type))].map((c) => `<span class="dot ${c === "yellow" ? "dot-y" : "dot-b"}" style="display:inline-block;width:7px;height:7px;border-radius:2px;"></span>`).join(" ");
-      const hasC = e.threads.some((t) => t.messages.length) ? "△" : "";
+        kindTag = `<span class="sr-kind">역번역 · ${esc(REV_STAGE_LABEL[rv.stage] || "1차")}</span>`;
+      } else {
+        const fields = [e.body, e.interpretation].concat(e.threads.flatMap((t) => t.messages.map((m) => m.content)));
+        const hit = (q && fields.find((f) => f.toLowerCase().includes(ql))) || e.body || e.interpretation || "";
+        snip = snippet(hit, q);
+        colors = [...new Set(e.highlights.map((h) => h.type))].map((c) => `<span class="dot ${c === "yellow" ? "dot-y" : "dot-b"}" style="display:inline-block;width:7px;height:7px;border-radius:2px;"></span>`).join(" ");
+        hasC = e.threads.some((t) => t.messages.length) ? "△" : "";
+      }
       return `<button type="button" class="sr-item${i === searchState.cursor ? " is-cursor" : ""}" data-id="${escAttr(e.id)}">
-        <div class="sr-meta"><span>${esc(fmtDate(e.date))}</span>${colors ? `<span>${colors}</span>` : ""}${hasC ? `<span>${hasC}</span>` : ""}</div>
+        <div class="sr-meta"><span>${esc(fmtDate(e.date))}</span>${colors ? `<span>${colors}</span>` : ""}${hasC ? `<span>${hasC}</span>` : ""}${kindTag}</div>
         <div class="sr-src">${esc(srcLabel(e) || "제목 없음")}</div>
         <div class="sr-snippet">${snip}</div>
       </button>`;
@@ -2208,7 +2823,7 @@
       for (const e of state.entries) dirtyEntries.add(e.id);
       dirtyAppState = true;
       currentId = (orderedEntries()[0] || {}).id || null;
-      currentPassageId = null;
+      currentPassageId = null; revModeId = null; revDrafts.clear();
       cacheLocal(); scheduleSync();
       renderRecentList(); renderSidebarCounts(); renderRoute();
       toast(`${n}개의 필사를 가져왔습니다`);
@@ -2241,12 +2856,14 @@
     D.wordsBtn.addEventListener("click", () => go("#words"));
     D.sentencesBtn.addEventListener("click", () => go("#sentences"));
     D.thoughtsBtn.addEventListener("click", () => go("#thoughts"));
+    D.patternsBtn.addEventListener("click", () => go("#patterns"));
     D.projectsBtn.addEventListener("click", () => go("#projects"));
     D.exportBtn.addEventListener("click", exportJSON);
     D.importBtn.addEventListener("click", () => D.importInput.click());
     D.importInput.addEventListener("change", () => { importJSON(D.importInput.files && D.importInput.files[0]); D.importInput.value = ""; });
     D.signOutBtn.addEventListener("click", () => { if (confirm("로그아웃할까요?")) signOut(); });
     D.recentList.addEventListener("click", (ev) => { const b = ev.target.closest(".recent-item"); if (b) openEntry(b.dataset.id); });
+    D.revisitList.addEventListener("click", (ev) => { const b = ev.target.closest(".recent-item"); if (b) { go("#daily"); openEntry(b.dataset.id); } });
 
     // entry header
     D.deleteEntryBtn.addEventListener("click", deleteCurrentEntry);
@@ -2321,6 +2938,97 @@
       touchEntry(e);
       D.reflectModes.querySelectorAll(".reflect-mode").forEach((x) => x.classList.toggle("is-on", x === b));
       D.reflectModeDesc.textContent = modeDesc(e.reflection.mode);
+    });
+
+    // 역번역 entry — header + setup + write + compare
+    D.revDeleteBtn.addEventListener("click", deleteCurrentEntry);
+    D.revDate.addEventListener("change", () => {
+      const e = currentEntry(); if (!e) return;
+      const v = D.revDate.value; if (!v) { D.revDate.value = e.date; return; }
+      e.date = v; D.revWeekday.textContent = weekdayOf(v) ? "· " + weekdayOf(v) : "";
+      touchEntry(e); renderRecentList();
+    });
+    const onRevSrc = (k, el) => { const e = currentEntry(); if (!e) return; e.source[k] = el.value; touchEntry(e); renderRecentList(); refreshSourceDatalists(); };
+    D.revAuthor.addEventListener("input", () => onRevSrc("author", D.revAuthor));
+    D.revTitle.addEventListener("input", () => onRevSrc("title", D.revTitle));
+    D.revPage.addEventListener("input", () => onRevSrc("page", D.revPage));
+
+    D.revSetupKo.addEventListener("input", () => autoGrow(D.revSetupKo, 600));
+    D.revSetupTarget.addEventListener("input", () => autoGrow(D.revSetupTarget, 600));
+    D.revSetupSave.addEventListener("click", saveReverseSetup);
+    D.revSetupCancel.addEventListener("click", () => { revMode = "write"; renderReverseEntry(); });
+    D.revEditSetup.addEventListener("click", () => {
+      if (!confirm("정답지를 다시 열면 이번 시도의 훈련 효과가 줄어듭니다.\n계속할까요?")) return;
+      revMode = "setup"; renderReverseEntry();
+      setTimeout(() => { try { D.revSetupKo.focus(); } catch (_) {} }, 0);
+    });
+
+    // the attempt draft is session-only — an attempt exists only once submitted
+    D.revAttemptInput.addEventListener("input", () => {
+      autoGrow(D.revAttemptInput, 900);
+      if (currentId) revDrafts.set(currentId, D.revAttemptInput.value);
+    });
+    D.revAttemptInput.addEventListener("keydown", (ev) => {
+      if ((ev.metaKey || ev.ctrlKey) && ev.key === "Enter") { ev.preventDefault(); submitReverseAttempt(); }
+    });
+    D.revSubmit.addEventListener("click", submitReverseAttempt);
+    D.revPrior.addEventListener("click", (ev) => {
+      const b = ev.target.closest("[data-rev-open]"); if (!b) return;
+      revShownAttemptId = b.dataset.revOpen; revMode = "compare"; renderReverseEntry();
+      try { D.revCompare.scrollIntoView({ behavior: "smooth", block: "start" }); } catch (_) {}
+    });
+    D.revCompare.addEventListener("click", (ev) => {
+      if (ev.target.closest("#revBackToWrite")) { revMode = "write"; renderReverseEntry(); try { D.revAttemptInput.focus(); } catch (_) {} return; }
+      if (ev.target.closest("#revFileBtn")) { fileAnalysisPatterns(); return; }
+      if (ev.target.closest("#revRetryBtn")) {
+        const e = currentEntry(); if (!e || e.kind !== "reverse") return;
+        const at = shownAttempt();
+        if (at) runReverseAnalysis(e, at);
+      }
+    });
+    // 필사 칸 — the reader hand-copies the correct sentence; saved onto that diff
+    D.revCompare.addEventListener("input", (ev) => {
+      const ta = ev.target.closest("[data-rev-practice]"); if (!ta) return;
+      const e = currentEntry(); if (!e || e.kind !== "reverse") return;
+      const at = shownAttempt(); if (!at || !at.analysis) return;
+      const d = at.analysis.diffs[+ta.dataset.revPractice]; if (!d) return;
+      d.practice = ta.value;
+      autoGrow(ta, 260);
+      touchEntry(e);
+      // flip the ✓ without re-rendering the whole panel (would blow away focus)
+      const wrap = ta.closest(".rev-practice");
+      const model = wrap.dataset.model || "";
+      const done = !!d.practice.trim() && revNormForMatch(d.practice) === revNormForMatch(model);
+      wrap.classList.toggle("is-done", done);
+      const h = wrap.querySelector(".rev-practice-h");
+      const ok = h && h.querySelector(".rev-practice-ok");
+      if (done && !ok) h.insertAdjacentHTML("beforeend", `<span class="rev-practice-ok">✓ 일치</span>`);
+      else if (!done && ok) ok.remove();
+    });
+
+    // patterns view
+    D.patternsFilter.addEventListener("input", () => { patternsState.filter = D.patternsFilter.value; renderPatternsView(); });
+    D.patternsStarFilter.addEventListener("click", (ev) => {
+      const b = ev.target.closest("button[data-star]"); if (!b) return;
+      patternsState.star = b.dataset.star; renderPatternsView();
+    });
+    D.patternsCats.addEventListener("click", (ev) => {
+      const b = ev.target.closest("button[data-cat]"); if (!b) return;
+      patternsState.cat = b.dataset.cat; renderPatternsView();
+    });
+    D.patternList.addEventListener("click", (ev) => {
+      const open = ev.target.closest("[data-open-entry]"); if (open) { go("#daily"); openEntry(open.dataset.openEntry); return; }
+      const star = ev.target.closest("[data-pat-star]");
+      if (star) {
+        const p = state.patterns.find((x) => x.id === star.dataset.patStar);
+        if (p) { p.starred = !p.starred; touchAppState(); renderPatternsView(); }
+        return;
+      }
+      const del = ev.target.closest("[data-pat-del]");
+      if (del) {
+        const p = state.patterns.find((x) => x.id === del.dataset.patDel);
+        if (p && confirm("이 패턴을 지울까요?")) { state.patterns = state.patterns.filter((x) => x.id !== p.id); touchAppState(); renderPatternsView(); renderSidebarCounts(); }
+      }
     });
 
     // body: read mode
@@ -2530,7 +3238,7 @@
       if (mod && (ev.key === "1" || ev.key === "2") && editing && pendingSel) { ev.preventDefault(); applyHighlight(ev.key === "1" ? "yellow" : "blue"); return; }
       if (ev.key === "Escape") { if (!D.modalScrim.hidden) closeModal(); else if (!D.searchScrim.hidden) closeSearch(); else { closeSlashMenu(); hideToolbar(); } hideWordTip(); }
     });
-    window.addEventListener("resize", () => { applySidebar(); if (!D.entryView.hidden) autoGrow(D.interpInput); autoGrow(D.claudeInput, 160); hideToolbar(); hideWordTip(); });
+    window.addEventListener("resize", () => { applySidebar(); if (!D.entryView.hidden) autoGrow(D.interpInput); if (!D.reverseView.hidden) autoGrow(D.revAttemptInput, 900); autoGrow(D.claudeInput, 160); hideToolbar(); hideWordTip(); });
     window.addEventListener("hashchange", renderRoute);
     window.addEventListener("online", () => { online = true; flushSyncNow(); pullAndRefresh(); });
     window.addEventListener("offline", () => { online = false; });

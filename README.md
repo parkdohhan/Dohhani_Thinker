@@ -18,8 +18,10 @@ proxy live on **Supabase** (project `Dohhani_Thinker`, ref `ooqzmtgbhctsrghjnrda
 - **나의 문장** — every anchored Claude thread, as a browsable archive: click a sentence to see your interpretation + Claude's feedback (meaning / grammar / a better rendering). Exactly the "my words / my sentences" split.
 - **Search** — `⌘K`. Full-text over body · interpretation · source · Claude messages, with filter chips (highlight colour, has-Claude, date range, author).
 - **프로젝트 · 아카이브 (Art mode)** — Cha-style (black/white, sparse, thin serif, Latin-footnote source citations). Chronological fragments, numbered; corrections shown as struck-through palimpsests (errors preserved); per-entry publish/hide toggle; a curator's note.
+- **역번역 (reverse translation)** — a drill, not a piece of writing. Pair a Korean paragraph of your own with its English translation (the *target*), then reproduce the English from the Korean with the target hidden. On submit: a two-column word-diff, plus a Claude analysis that sorts every divergence into four categories (`lexis-register` / `connectives` / `structure` / `articles-prepositions`). Each finding shows **the whole sentence** it occurs in — your wording marked red, the target's green — with a 필사 box underneath to hand-copy the correct sentence. Fixed revisit schedule: +3 days, then +2 weeks. Attempts are append-only; the target is never in the DOM while you're writing.
+- **나의 패턴** — the divergences you chose to keep, deduped by `내 표현 → 목표 표현` so a repeated failure raises a counter instead of adding a row. Four category chips double as a weakness map.
 - **Errors preserved** — editing a saved interpretation pushes the prior version into the entry's `corrections`; visible in Art mode and via "n번 고쳐 씀 — 이전 해석 보기".
-- **Keyboard** — `⌘N` new · `⌘K` search · `⌘S` force-sync · `⌘1`/`⌘2` yellow/blue on a selection (in edit mode) · `⌘↵` in the interpretation field sends it to Claude · `Esc` closes things.
+- **Keyboard** — `⌘N` new · `⌘K` search · `⌘S` force-sync · `⌘1`/`⌘2`/`⌘3` pick 필사/사유/역번역 in the new-doc modal · `⌘1`/`⌘2` yellow/blue on a selection (in edit mode) · `⌘↵` sends the interpretation / 사유 paragraph / 역번역 attempt · `Esc` closes things.
 - Cross-device sync (local-first cache → Supabase), light + dark, JSON export/import, responsive sidebar collapse.
 
 ## One-time Supabase setup (do this once, then it just works)
@@ -64,18 +66,41 @@ Redirect URLs) if you kept email confirmation on; otherwise nothing else to do.
 |---|---|
 | `index.html` · `styles.css` · `app.js` | the whole front-end |
 | `supabase/migrations/0001_init.sql` | `entries` + `app_state` tables, RLS, `updated_at` trigger (already applied) |
+| `supabase/migrations/0002_reverse_patterns.sql` | `app_state.patterns` column for 나의 패턴 (already applied) |
 | `supabase/functions/claude/index.ts` | the Anthropic proxy Edge Function — redeploy after changing it: `supabase functions deploy claude --project-ref ooqzmtgbhctsrghjnrda` |
 
 ### Data model (in `entries.data` jsonb, one row per entry)
 
 ```
-Entry  { id, date, source:{author,title,page}, body, interpretation,
-         highlights:[{id,startChar,endChar,type:'yellow'|'blue',note}],
-         corrections:[{timestamp,previousText,newText}],
-         threads:[{id,anchorChar,anchorText,fromInterp,createdAt,messages:[{id,role,content,timestamp}]}] }
+Entry  { id, date, kind:'transcription'|'reflection'|'reverse',
+         source:{author,title,page}, createdAt, updatedAt }
+
+// kind: 'transcription' — one document, many passages
+     + passages:[{ id, body, interpretation,
+                   highlights:[{id,startChar,endChar,type:'yellow'|'blue',note}],
+                   corrections:[{timestamp,previousText,newText}],
+                   threads:[{id,anchorChar,anchorText,fromInterp,createdAt,messages:[…]}] }]
+     + body / highlights / interpretation / corrections / threads   // mirror of the active passage
+
+// kind: 'reflection' — an alternating chain of my paragraphs and Claude's corrections
+     + reflection:{ mode, blocks:[ {id,kind:'user',text}
+                                 | {id,kind:'ai',mode,input,corrected,errors:[{tag,detail}],…} ] }
+
+// kind: 'reverse' — the 역번역 drill
+     + reverse:{ koSource, target,                       // target: never rendered while writing
+                 attempts:[{ id, timestamp, text,        // append-only
+                             analysis: null | { verdict,
+                               diffs:[{mine,targetFrag,category,note,practice}],
+                               better:[…] } }],
+                 nextRevisit: null|'YYYY-MM-DD', stage:'new'|'d3'|'d14'|'done' }
 ```
 `app_state.terms` = `[{id,word,definitions:[…],encounters:[{entryId,date,context,note,charStart,charEnd}]}]`,
+`app_state.patterns` = `[{id,mine,targetFrag,category,note,starred,sourceEntryId,createdAt,hits}]`,
 `app_state.settings` = `{artAesthetic:'cha', curatorNote, unpublishedIds:[…]}`.
+
+> Adding a field to an entry means touching **four** places — `blankEntry`, `normEntry`
+> (and its per-kind `norm*` helper), `entryToRow`, and `rowToEntry`. A field `normEntry`
+> doesn't know is silently dropped on the next Supabase round trip.
 
 ## Known limits / TODO
 

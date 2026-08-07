@@ -106,6 +106,94 @@ function normalizeReflectResult(parsed: any, mode: string, fallbackText: string)
   return out;
 }
 
+// === 역번역 (reverse translation) mode ===
+// The reader has a Korean paragraph of their own academic prose and an English
+// translation of it (the "target"). They reproduce the English from memory and
+// we compare their attempt against the target. JSON only.
+const REVERSE_PROMPT = `You are analyzing a Korean→English reverse-translation drill. The reader is a Korean academic writer training to produce English prose. They were shown only the Korean source and wrote an English version from it; the "target" is a separate English translation of the same Korean.
+
+Compare the reader's attempt against the target and account for every meaningful difference. Be precise and concise. Write the notes in Korean, in plain analytic register (분석체 — no 존댓말, no praise, no filler); keep English words, phrases and grammatical terms in English.
+
+Classify each difference into exactly one category:
+- "lexis-register": word choice, collocation, formality/academic register
+- "connectives": however / thus / whereas / that is — discourse markers and how clauses are joined
+- "structure": clause order, nominalization vs. verb, voice, sentence splitting/merging, information order
+- "articles-prepositions": a/an/the, singular/plural, and preposition choice
+
+The target is itself a machine translation — it is NOT an infallible answer key. Where the reader's wording is as good as or better than the target, put it in "better" instead of "diffs" and say why in Korean.
+
+Ignore trivial differences: capitalization, punctuation style, obvious typos, and pure whitespace.
+
+Return STRICT JSON only — no markdown fences, no prose before or after. Schema:
+
+{
+  "verdict": "<한 줄 총평 — 이번 시도에서 가장 두드러진 경향 하나>",
+  "diffs": [
+    {"mine": "<내 표현 — attempt에서 그대로 인용>",
+     "targetFrag": "<대응하는 target 표현 — target에서 그대로 인용>",
+     "category": "lexis-register",
+     "note": "<왜 갈렸는지 한 문장>"}
+  ],
+  "better": ["<내 출력이 target보다 낫거나 동등한 지점 — 한 문장씩>"]
+}
+
+At most 12 diffs; put the ones that matter most first. If nothing differs meaningfully, return diffs: []. Return ONLY the JSON object.`;
+
+function buildReverseSystem(ctx: any): string {
+  let base = REVERSE_PROMPT;
+  if (!ctx || typeof ctx !== "object") return base;
+  const src = [ctx.author, ctx.title, ctx.page].filter(Boolean).join(" · ");
+  if (src) base += `\n\n--- Context: the paper / section this paragraph comes from ---\n${src}`;
+  return base;
+}
+
+function buildReverseUserMessage(
+  koSource: string,
+  target: string,
+  attempt: string,
+  priorAttempts: string[],
+): string {
+  const parts = [
+    `[Korean source]\n${koSource.trim()}`,
+    `[Target English translation]\n${target.trim()}`,
+    `[The reader's attempt]\n${attempt.trim()}`,
+  ];
+  if (priorAttempts.length) {
+    parts.push(
+      `[The reader's earlier attempts at this same paragraph, oldest first]\n` +
+        priorAttempts.map((t, i) => `(${i + 1}) ${t.trim()}`).join("\n\n") +
+        `\n\nIf a mistake from an earlier attempt is now fixed, or has come back, say so in "verdict".`,
+    );
+  }
+  return parts.join("\n\n");
+}
+
+function normalizeReverseResult(parsed: any, fallbackText: string) {
+  const CATEGORIES = ["lexis-register", "connectives", "structure", "articles-prepositions"];
+  const out: any = { verdict: "", diffs: [], better: [] };
+  if (parsed && typeof parsed === "object") {
+    if (typeof parsed.verdict === "string") out.verdict = parsed.verdict;
+    if (Array.isArray(parsed.diffs)) {
+      out.diffs = parsed.diffs
+        .filter((x: any) => x && typeof x === "object")
+        .map((x: any) => ({
+          mine: typeof x.mine === "string" ? x.mine.slice(0, 400) : "",
+          targetFrag: typeof x.targetFrag === "string" ? x.targetFrag.slice(0, 400) : "",
+          category: CATEGORIES.includes(x.category) ? x.category : "structure",
+          note: typeof x.note === "string" ? x.note.slice(0, 800) : "",
+        }))
+        .filter((x: any) => x.mine || x.targetFrag)
+        .slice(0, 12);
+    }
+    if (Array.isArray(parsed.better)) {
+      out.better = parsed.better.filter((x: any) => typeof x === "string").map((x: string) => x.slice(0, 500)).slice(0, 6);
+    }
+  }
+  // If parsing failed entirely, surface the raw text so the UI can still show *something*
+  if (!parsed && fallbackText) out.verdict = fallbackText.slice(0, 1200);
+  return out;
+}
+
 // Appended to the system prompt when the frontend asks for structured "picks" —
 // the words/phrases the reader was unsure about, so they can be filed in 나의 단어 / 나의 문장.
 const EXTRACT_INSTRUCTION = `
@@ -190,29 +278,45 @@ Deno.serve(async (req) => {
     return json({ error: "Request body must be JSON." }, 400);
   }
 
-  const turns = Array.isArray(payload?.messages) ? payload.messages : null;
-  if (!turns || turns.length === 0) {
-    return json({ error: "`messages` (a non-empty array of {role, content}) is required." }, 400);
-  }
-
-  const messages = turns
-    .map((m: any) => ({
-      role: m?.role === "assistant" ? "assistant" : "user",
-      content: typeof m?.content === "string" ? m.content : String(m?.content ?? ""),
-    }))
-    .filter((m: any) => m.content.trim().length > 0);
-  if (!messages.length) return json({ error: "No non-empty messages to send." }, 400);
-
+  const isReverse = payload?.reverse === true;
   const reflect = typeof payload?.reflect === "string" ? payload.reflect : "";
-  const isReflect = reflect === "correct" || reflect === "expand" || reflect === "deep";
-  const extract = !isReflect && payload?.extract === true;
+  const isReflect = !isReverse && (reflect === "correct" || reflect === "expand" || reflect === "deep");
+  const extract = !isReverse && !isReflect && payload?.extract === true;
 
+  let messages: Array<{ role: string; content: string }>;
   let system: string;
-  if (isReflect) {
-    system = buildReflectionSystem(payload?.context, reflect);
+
+  if (isReverse) {
+    // 역번역: the frontend sends the drill itself, not a conversation.
+    const koSource = typeof payload?.koSource === "string" ? payload.koSource : "";
+    const target = typeof payload?.target === "string" ? payload.target : "";
+    const attempt = typeof payload?.attempt === "string" ? payload.attempt : "";
+    if (!attempt.trim()) return json({ error: "`attempt` (the reader's English) is required." }, 400);
+    if (!target.trim()) return json({ error: "`target` (the reference English) is required." }, 400);
+    const priorAttempts = (Array.isArray(payload?.priorAttempts) ? payload.priorAttempts : [])
+      .filter((x: any) => typeof x === "string" && x.trim())
+      .slice(-3);
+    system = buildReverseSystem(payload?.context);
+    messages = [{ role: "user", content: buildReverseUserMessage(koSource, target, attempt, priorAttempts) }];
   } else {
-    system = buildSystem(payload?.context);
-    if (extract) system += `\n${EXTRACT_INSTRUCTION}`;
+    const turns = Array.isArray(payload?.messages) ? payload.messages : null;
+    if (!turns || turns.length === 0) {
+      return json({ error: "`messages` (a non-empty array of {role, content}) is required." }, 400);
+    }
+    messages = turns
+      .map((m: any) => ({
+        role: m?.role === "assistant" ? "assistant" : "user",
+        content: typeof m?.content === "string" ? m.content : String(m?.content ?? ""),
+      }))
+      .filter((m: any) => m.content.trim().length > 0);
+    if (!messages.length) return json({ error: "No non-empty messages to send." }, 400);
+
+    if (isReflect) {
+      system = buildReflectionSystem(payload?.context, reflect);
+    } else {
+      system = buildSystem(payload?.context);
+      if (extract) system += `\n${EXTRACT_INSTRUCTION}`;
+    }
   }
 
   let resp: Response;
@@ -249,6 +353,11 @@ Deno.serve(async (req) => {
 
   if (!text) return json({ error: "Empty response from Claude.", raw: out }, 502);
 
+  if (isReverse) {
+    const parsed = parseReflectJSON(text); // same fence-stripping / first-{…} recovery
+    const result = normalizeReverseResult(parsed, parsed ? "" : text);
+    return json({ reverse: result, model: out?.model ?? MODEL, usage: out?.usage ?? null });
+  }
   if (isReflect) {
     const parsed = parseReflectJSON(text);
     const result = normalizeReflectResult(parsed, reflect, parsed ? "" : text);
