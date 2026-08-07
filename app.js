@@ -454,6 +454,9 @@
   function rowToEntry(r) {
     const d = r.data || {};
     return normEntry({ id: r.id, date: r.entry_date, kind: d.kind, source: d.source,
+      // `passages` MUST be read back — entryToRow writes it, and without it every
+      // multi-passage document collapses to its first passage on the next pull.
+      passages: d.passages,
       body: d.body, highlights: d.highlights, interpretation: d.interpretation, corrections: d.corrections,
       threads: d.threads, messages: d.messages, reflection: d.reflection,
       createdAt: r.created_at, updatedAt: r.updated_at });
