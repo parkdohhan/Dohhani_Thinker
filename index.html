@@ -376,13 +376,17 @@
       <div class="projects-grid" id="projectsGrid"></div>
     </section>
 
-    <!-- 프로젝트 상세 (한 프로젝트 = 아트 모드 아카이브) -->
+    <!-- 프로젝트 상세 — 필사는 아트 모드 아카이브로, 역번역은 오답노트로 (섞이면 탭) -->
     <section class="page view project-detail art-view" id="projectDetailView" hidden>
       <div class="project-detail-bar">
         <button class="project-back" id="projectBackBtn" type="button">
           <svg viewBox="0 0 24 24" class="icon"><path d="M19 12H5M11 6l-6 6 6 6"/></svg>
           <span>프로젝트</span>
         </button>
+        <div class="seg project-detail-tabs" id="projectDetailTabs" hidden>
+          <button type="button" data-tab="archive" class="is-on">아카이브</button>
+          <button type="button" data-tab="notebook">오답노트</button>
+        </div>
         <button class="art-tool" id="projectCuratorEditBtn">큐레이터 노트</button>
       </div>
       <div class="art-scroll" id="projectArtScroll"></div>

@@ -750,7 +750,7 @@
       "libraryBtn","libraryCount","libraryView","librarySub","kitGrid",
       "wordsView","wordsSub","wordsFilter","wordsSort","wordsGrid","sentencesView","sentencesSub","sentencesFilter","sentenceList",
       "projectsBtn","projectsCount","projectsView","projectsSort","projectsFilter","projectsGrid","projectsKindFilter","projectsNewBtn",
-      "projectDetailView","projectBackBtn","projectCuratorEditBtn","projectArtScroll",
+      "projectDetailView","projectBackBtn","projectCuratorEditBtn","projectArtScroll","projectDetailTabs",
       "searchScrim","searchInput","searchClose","searchFilters","chipColor","chipClaude","chipFrom","chipTo","chipAuthor","searchResults",
       "modalScrim","modalClose","modalTitle","modalBody","modalActions","wordTip","toast",
       "tourBtn","tour","tourSpot","tourCard","tourStep","tourTitle","tourText","tourDots","tourSkip","tourPrev","tourNext",
@@ -2644,16 +2644,33 @@
       </button>`;
     }).join("");
   }
+  // 필사는 작품(아카이브)으로, 역번역은 공부의 산출물(오답노트)로 — 문서 종류마다 어울리는 장르로 정리된다.
+  let projectDetailTab = "archive";
   function renderProjectDetailView(slugRaw) {
     let key;
     try { key = decodeURIComponent(slugRaw || ""); } catch (_) { key = slugRaw || ""; }
     const all = getProjects();
     const p = all.find((x) => x.key === key);
     if (!p) {
+      D.projectDetailTabs.hidden = true;
+      D.projectDetailView.classList.add("art-view");
+      D.projectDetailView.classList.remove("is-notebook");
+      D.projectCuratorEditBtn.hidden = false;
       D.projectArtScroll.innerHTML = `<div class="art-empty">— 이 프로젝트가 없습니다. 엔트리가 모두 삭제되었거나 출처가 바뀌었습니다. —</div>`;
       return;
     }
-    renderProjectArchive(p, D.projectArtScroll);
+    const hasT = p.transcriptionCount > 0, hasR = p.reverseCount > 0;
+    let tab = projectDetailTab;
+    if (!hasR) tab = "archive";
+    else if (!hasT) tab = "notebook";
+    D.projectDetailTabs.hidden = !(hasT && hasR);
+    D.projectDetailTabs.querySelectorAll("button").forEach((b) => b.classList.toggle("is-on", b.dataset.tab === tab));
+    // 오답노트 is a study page, not part of the Cha piece — drop the art skin there
+    D.projectDetailView.classList.toggle("art-view", tab !== "notebook");
+    D.projectDetailView.classList.toggle("is-notebook", tab === "notebook");
+    D.projectCuratorEditBtn.hidden = tab === "notebook";
+    if (tab === "notebook") renderProjectNotebook(p, D.projectArtScroll);
+    else renderProjectArchive(p, D.projectArtScroll);
   }
   function renderProjectArchive(p, to) {
     const unpub = new Set(state.settings.unpublishedIds || []);
@@ -2664,7 +2681,7 @@
     const ago = humanAgo(p.lastUpdated);
     const meta = `${list.length}개` +
       (p.transcriptionCount ? ` · 필사 ${p.transcriptionCount}` : "") +
-      (p.reverseCount ? ` · 역번역 ${p.reverseCount} (아카이브 제외)` : "") +
+      (p.reverseCount ? ` · 역번역 ${p.reverseCount} (오답노트)` : "") +
       (ago ? ` · ${ago} 업데이트됨` : "");
     let html = `<div class="art-frontis">
       <div class="ft-mark">${esc(title)}</div>
@@ -2673,7 +2690,7 @@
       <div class="ft-rule"></div>
     </div>`;
     if (!list.length) {
-      html += `<div class="art-empty">${p.reverseCount ? "— 역번역 문서는 아카이브에 담기지 않습니다 —" : "— 아직 비어 있습니다 —"}</div>`;
+      html += `<div class="art-empty">${p.reverseCount ? "— 역번역은 오답노트 탭에 정리됩니다 —" : "— 아직 비어 있습니다 —"}</div>`;
       to.innerHTML = html; return;
     }
     list.forEach((e, idx) => {
@@ -2701,6 +2718,99 @@
         ${foot}
       </section>`;
     });
+    to.innerHTML = html;
+  }
+
+  /* 오답노트 — the study counterpart of the art archive: everything this project's
+     역번역 drills say I got wrong, deduped the same way 나의 패턴 dedupes (patKey),
+     so a repeated divergence reads as a count, not as noise. */
+  function renderProjectNotebook(p, to) {
+    const revs = p.entries.filter((e) => e.kind === "reverse").sort((a, b) =>
+      a.date.localeCompare(b.date) || String(a.createdAt).localeCompare(String(b.createdAt)));
+    const agg = new Map();
+    let attemptCount = 0, passageCount = 0;
+    for (const e of revs) {
+      for (const ps of (e.reverse && e.reverse.passages) || []) {
+        if (!(ps.koSource || "").trim() && !ps.attempts.length) continue;
+        passageCount++;
+        for (const a of ps.attempts) {
+          attemptCount++;
+          if (!a.analysis) continue;
+          for (const d of a.analysis.diffs) {
+            const k = patKey(d.mine, d.targetFrag);
+            let row = agg.get(k);
+            if (!row) agg.set(k, row = { mine: d.mine, targetFrag: d.targetFrag, category: d.category, note: d.note, count: 0, last: "" });
+            row.count++;
+            if (a.timestamp > row.last) { row.last = a.timestamp; if (d.note) row.note = d.note; }
+          }
+        }
+      }
+    }
+    const diffs = [...agg.values()];
+    const catCount = {};
+    for (const c of REV_CATEGORIES) catCount[c] = 0;
+    for (const d of diffs) catCount[d.category] = (catCount[d.category] || 0) + d.count;
+
+    let html = `<div class="nb">
+      <header class="nb-head">
+        <h1 class="nb-title">${esc(projectTitle(p))} — 오답노트</h1>
+        <p class="nb-sub">역번역 ${revs.length}개 · 문단 ${passageCount} · 시도 ${attemptCount}회 · 갈림 ${diffs.length}종</p>
+        ${diffs.length ? `<div class="pat-cats nb-cats">${REV_CATEGORIES.map((c) => catCount[c]
+          ? `<span class="pat-cat nb-cat cat-${c} is-on">${esc(REV_CAT_LABEL[c])}<span class="pat-cat-n">${catCount[c]}회</span></span>` : "").join("")}</div>` : ""}
+      </header>`;
+
+    if (diffs.length) {
+      diffs.sort((a, b) => b.count - a.count || String(b.last).localeCompare(String(a.last)));
+      html += `<div class="nb-h">반복 실수 — 많이 갈린 순</div><div class="nb-list">`;
+      for (const d of diffs) {
+        const filed = findPattern(patKey(d.mine, d.targetFrag));
+        html += `<div class="nb-row${filed && filed.starred ? " is-starred" : ""}">
+          <div class="pattern-row-top">
+            ${revCatBadge(d.category)}
+            ${d.count > 1 ? `<span class="pattern-hits">${d.count}회 갈림</span>` : ""}
+            ${filed ? `<span class="rev-diff-filed">나의 패턴에 담김${filed.starred ? " ★" : ""}</span>` : ""}
+          </div>
+          <div class="rev-diff-pair">
+            <div class="rev-sent-row"><span class="rev-diff-lbl">내</span><span class="rev-frag rev-x">${esc(d.mine) || "—"}</span></div>
+            <div class="rev-sent-row"><span class="rev-diff-lbl">목표</span><span class="rev-frag rev-o">${esc(d.targetFrag) || "—"}</span></div>
+          </div>
+          ${d.note ? `<div class="pattern-note">${esc(d.note)}</div>` : ""}
+        </div>`;
+      }
+      html += `</div>`;
+    } else {
+      html += `<div class="list-empty">아직 분석된 시도가 없습니다. 역번역 문단을 제출하면 갈림이 여기 모입니다.</div>`;
+    }
+
+    if (passageCount) {
+      html += `<div class="nb-h">문단별 요점</div>`;
+      for (const e of revs) {
+        const label = [e.source.page, fmtDate(e.date)].filter(Boolean).join(" · ");
+        html += `<section class="nb-doc">
+          <div class="nb-doc-head">
+            <span class="nb-doc-title">${esc(label || e.date)}</span>
+            <button type="button" class="pattern-open" data-open-entry="${escAttr(e.id)}">열기 →</button>
+          </div>`;
+        for (const ps of (e.reverse && e.reverse.passages) || []) {
+          if (!(ps.koSource || "").trim() && !ps.attempts.length) continue;
+          const latest = [...ps.attempts].reverse().find((a) => a.analysis) || null;
+          const due = ps.nextRevisit && ps.nextRevisit <= todayISO() && ps.stage !== "done";
+          html += `<div class="nb-pass">
+            <div class="nb-ko">${esc((ps.koSource || "").trim().slice(0, 180))}</div>
+            <div class="nb-pass-meta">
+              <span class="rev-stage-badge${ps.stage === "done" ? " stage-done" : ""}${due ? " is-due" : ""}">${esc(REV_STAGE_LABEL[ps.stage] || ps.stage)}</span>
+              <span>시도 ${ps.attempts.length}회</span>
+              ${ps.nextRevisit && ps.stage !== "done" ? `<span>다음 재시도 ${esc(fmtDate(ps.nextRevisit))}</span>` : ""}
+            </div>
+            ${latest && latest.analysis.verdict ? `<div class="nb-verdict">${esc(latest.analysis.verdict)}</div>` : ""}
+            ${latest && latest.analysis.better.length ? `<div class="nb-better">${latest.analysis.better.slice(0, 2).map((b) =>
+              `<div class="nb-better-row"><span class="tri">△</span>${esc(b)}</div>`).join("")}</div>` : ""}
+          </div>`;
+        }
+        html += `</section>`;
+      }
+    }
+    html += `</div>`;
     to.innerHTML = html;
   }
 
@@ -3547,9 +3657,18 @@
       const row = ev.target.closest(".sentence-row"); if (row) { sentencesState.open = sentencesState.open === row.dataset.sentence ? null : row.dataset.sentence; renderSentencesView(); }
     });
 
-    // project detail (art-style archive of one project)
+    // project detail (art archive + 오답노트 tabs)
     D.projectCuratorEditBtn.addEventListener("click", editCuratorNote);
+    D.projectDetailTabs.addEventListener("click", (ev) => {
+      const b = ev.target.closest("button[data-tab]");
+      if (!b) return;
+      projectDetailTab = b.dataset.tab;
+      const { arg } = parseHash();
+      if (arg && arg.length) renderProjectDetailView(arg[0]);
+    });
     D.projectArtScroll.addEventListener("click", (ev) => {
+      const openBtn = ev.target.closest("[data-open-entry]");
+      if (openBtn) { go("#daily"); openEntry(openBtn.dataset.openEntry); return; }
       const pub = ev.target.closest("[data-pub]");
       if (pub) {
         ev.stopPropagation();
