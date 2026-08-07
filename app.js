@@ -1434,13 +1434,14 @@
             </span>
           </div>
           ${reading
-            ? `<div class="rev-col-body rev-target-read" id="revTargetRead">${revBuildTargetHtml(rv)}</div>`
-            : `<div class="rev-col-body">${wdRender(d.b, d.right, "wd-ins")}</div>`}
+            ? `<div class="rev-col-body rev-target-read" id="revTargetRead" data-revtarget>${revBuildTargetHtml(rv)}</div>`
+            /* the diff spans hold the target's tokens verbatim and in order, so text
+               offsets match the target string exactly — it is markable here too */
+            : `<div class="rev-col-body rev-target-read" data-revtarget>${wdRender(d.b, d.right, "wd-ins")}</div>`}
         </div>
       </div>
-      ${reading
-        ? `<div class="rev-note-small">목표 영문을 드래그하면 🟡 단어 · 🔵 구절로 표시하거나 △ 로 물어볼 수 있습니다.</div>`
-        : (d.skipped ? `<div class="rev-note-small">문단이 너무 길어 단어 대조는 건너뛰었습니다.</div>` : `<div class="rev-note-small">단어 차이 ${d.changes}개</div>`)}
+      <div class="rev-note-small">${d.skipped ? "문단이 너무 길어 단어 대조는 건너뛰었습니다." : `단어 차이 ${d.changes}개`}
+        <span class="rev-mark-hint">· 목표 영문을 드래그하면 🟡 단어 · 🔵 구절 · △ 묻기</span></div>
       <div class="rev-analysis">${analysis}</div>
 
       <section class="rev-study">
@@ -1550,8 +1551,9 @@
   let revPendingSel = null;
   let revInterpSnapshot = "";
   function hideRevToolbar() { D.revHlToolbar.hidden = true; revPendingSel = null; }
+  const revTargetEl = () => D.revCompare.querySelector("[data-revtarget]");
   function onRevTargetSelect() {
-    const root = $("revTargetRead");
+    const root = revTargetEl();
     if (!root) return hideRevToolbar();
     const sel = window.getSelection();
     if (!sel || sel.isCollapsed || !sel.rangeCount) return hideRevToolbar();
@@ -1578,6 +1580,12 @@
   }
   function repaintRevTarget() {
     const e = currentEntry(); if (!e || e.kind !== "reverse") return;
+    if (revTargetView !== "read") {
+      // marked from the 대조 view — switch to 표시 so the mark is actually visible
+      revTargetView = "read";
+      renderReverseEntry();
+      return;
+    }
     const host = $("revTargetRead");
     if (host) host.innerHTML = revBuildTargetHtml(reverseOf(e));
   }
@@ -3236,7 +3244,12 @@
     // marking the revealed target
     D.revHlToolbar.addEventListener("mousedown", (ev) => ev.preventDefault());
     D.revHlToolbar.querySelectorAll(".hl-btn").forEach((b) => b.addEventListener("click", () => applyRevHighlight(b.dataset.type)));
-    document.addEventListener("selectionchange", () => { if (!D.reverseView.hidden && $("revTargetRead")) onRevTargetSelect(); });
+    const maybeRevSelect = () => { if (!D.reverseView.hidden && revTargetEl()) onRevTargetSelect(); };
+    document.addEventListener("selectionchange", maybeRevSelect);
+    // touch: iOS settles the selection after the finger lifts, and fires
+    // selectionchange while dragging the handles — check again on release
+    D.revCompare.addEventListener("pointerup", () => setTimeout(maybeRevSelect, 0));
+    D.revCompare.addEventListener("touchend", () => setTimeout(maybeRevSelect, 60));
     D.revCompare.addEventListener("mouseover", (ev) => {
       const t = ev.target.closest("#revTargetRead [data-term],#revTargetRead [data-note]");
       if (!t) return;
