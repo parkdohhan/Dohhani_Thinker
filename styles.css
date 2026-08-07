@@ -113,7 +113,23 @@ a { color: inherit; }
   margin-top: 12px; margin-bottom: 30px; font-size: 12.5px; color: var(--color-text-tertiary);
   font-family: var(--font-korean);
 }
+/* two real tabs — clicking 회원가입 has to visibly produce a different form,
+   not just relabel a button */
+.auth-tabs {
+  width: 100%; display: flex; gap: 0; margin-bottom: 18px;
+  border-bottom: 0.5px solid var(--color-border-secondary);
+}
+.auth-tab {
+  flex: 1; padding: 9px 0 10px; font-size: 13.5px;
+  color: var(--color-text-tertiary); background: none;
+  border-bottom: 1.5px solid transparent; margin-bottom: -1px;
+  transition: color 0.15s, border-color 0.15s;
+}
+.auth-tab:hover { color: var(--color-text-secondary); }
+.auth-tab.is-on { color: var(--color-text-primary); border-bottom-color: var(--color-text-primary); }
+
 .auth-form { width: 100%; display: flex; flex-direction: column; gap: 8px; }
+.auth-hint { font-size: 11.5px; line-height: 1.6; color: var(--color-text-tertiary); margin: 2px 2px 2px; }
 .auth-input {
   width: 100%; padding: 10px 12px; font-size: 14px;
   background: var(--color-background-primary);

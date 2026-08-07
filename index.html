@@ -22,13 +22,19 @@
   <div class="auth-card">
     <div class="auth-mark">필사</div>
     <p class="auth-tagline">두 언어를 건너는 한 사람의 기록</p>
+    <div class="auth-tabs" id="authTabs" role="tablist">
+      <button type="button" class="auth-tab is-on" data-mode="signin" role="tab">로그인</button>
+      <button type="button" class="auth-tab" data-mode="signup" role="tab">회원가입</button>
+    </div>
+
     <form class="auth-form" id="authForm" autocomplete="on">
       <input class="auth-input" id="authEmail" type="email" placeholder="이메일" autocomplete="username" required />
       <input class="auth-input" id="authPassword" type="password" placeholder="비밀번호" autocomplete="current-password" required minlength="6" />
+      <input class="auth-input" id="authPassword2" type="password" placeholder="비밀번호 확인" autocomplete="new-password" minlength="6" hidden />
+      <p class="auth-hint" id="authHint" hidden>6자 이상. 비밀번호 찾기 기능이 없으니 잊지 않을 것으로 정해 주세요.</p>
       <button class="auth-submit" id="authSubmit" type="submit">로그인</button>
     </form>
     <div class="auth-msg" id="authMsg"></div>
-    <button class="auth-switch" id="authSwitch" type="button">계정이 없으신가요? — 회원가입</button>
     <p class="auth-note" id="authNote"></p>
   </div>
 </div>

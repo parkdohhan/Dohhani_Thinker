@@ -690,7 +690,7 @@
   const D = {};
   function bindRefs() {
     [
-      "authView","authForm","authEmail","authPassword","authSubmit","authMsg","authSwitch","authNote",
+      "authView","authForm","authEmail","authPassword","authPassword2","authHint","authSubmit","authMsg","authTabs","authNote",
       "app","sidebar","sidebarToggle","wordmark","syncDot","newEntryBtn","searchBtn","wordsBtn","sentencesBtn",
       "wordsCount","sentencesCount","recentList","revisitBlock","revisitList","exportBtn","importBtn","signOutBtn","importInput","sidebarReopen","main",
       "emptyState","emptyNewBtn","entryView","entryDate","entryWeekday","entryStatus","deleteEntryBtn","srcAuthor","srcTitle","srcPage",
@@ -2741,12 +2741,19 @@
   /* ─────────────────────── AUTH ─────────────────────── */
   let authMode = "signin"; // or "signup"
   function setAuthMode(m) {
-    authMode = m;
-    D.authSubmit.textContent = m === "signup" ? "회원가입" : "로그인";
-    D.authSwitch.textContent = m === "signup" ? "이미 계정이 있으신가요? — 로그인" : "계정이 없으신가요? — 회원가입";
-    D.authPassword.autocomplete = m === "signup" ? "new-password" : "current-password";
+    authMode = m === "signup" ? "signup" : "signin";
+    const up = authMode === "signup";
+    D.authTabs.querySelectorAll(".auth-tab").forEach((b) => b.classList.toggle("is-on", b.dataset.mode === authMode));
+    D.authSubmit.textContent = up ? "회원가입" : "로그인";
+    // signup gets its own field, so switching tabs visibly produces a different form
+    D.authPassword2.hidden = !up;
+    D.authPassword2.required = up;
+    D.authPassword2.value = "";
+    D.authHint.hidden = !up;
+    D.authPassword.autocomplete = up ? "new-password" : "current-password";
+    D.authPassword.placeholder = up ? "비밀번호 (6자 이상)" : "비밀번호";
     D.authMsg.textContent = ""; D.authMsg.classList.remove("ok");
-    D.authNote.textContent = m === "signup"
+    D.authNote.textContent = up
       ? "이 기록은 당신의 계정에만 보입니다. 같은 이메일·비밀번호로 다른 기기에서도 이어 쓸 수 있습니다."
       : "";
   }
@@ -2754,6 +2761,11 @@
     ev.preventDefault();
     const email = D.authEmail.value.trim(), pw = D.authPassword.value;
     if (!email || pw.length < 6) { D.authMsg.textContent = "이메일과 6자 이상의 비밀번호를 입력해 주세요."; return; }
+    if (authMode === "signup" && D.authPassword2.value !== pw) {
+      D.authMsg.textContent = "두 비밀번호가 서로 다릅니다.";
+      D.authPassword2.focus();
+      return;
+    }
     D.authSubmit.disabled = true; D.authMsg.textContent = "…"; D.authMsg.classList.remove("ok");
     try {
       if (authMode === "signup") {
@@ -2863,7 +2875,11 @@
   function wire() {
     // auth
     D.authForm.addEventListener("submit", handleAuthSubmit);
-    D.authSwitch.addEventListener("click", () => setAuthMode(authMode === "signup" ? "signin" : "signup"));
+    D.authTabs.addEventListener("click", (ev) => {
+      const b = ev.target.closest(".auth-tab"); if (!b) return;
+      setAuthMode(b.dataset.mode);
+      D.authEmail.focus();
+    });
 
     // sidebar nav
     D.newEntryBtn.addEventListener("click", newEntry);
