@@ -124,7 +124,7 @@
   const deletedEntries = new Set();
   let dirtyAppState = false;
 
-  function newVault() { return { entries: [], terms: [], patterns: [], settings: { artAesthetic: "cha", curatorNote: "", unpublishedIds: [], tourSeenAt: "" } }; }
+  function newVault() { return { entries: [], terms: [], patterns: [], settings: { artAesthetic: "cha", curatorNote: "", unpublishedIds: [], kitsTaken: [], tourSeenAt: "" } }; }
 
   /* 역번역 (reverse translation) — the four categories a diff can fall into */
   const REV_CATEGORIES = ["lexis-register", "connectives", "structure", "articles-prepositions"];
@@ -399,6 +399,7 @@
         artAesthetic: (v.settings && v.settings.artAesthetic) || "cha",
         curatorNote: (v.settings && v.settings.curatorNote) || "",
         unpublishedIds: (v.settings && Array.isArray(v.settings.unpublishedIds)) ? v.settings.unpublishedIds : [],
+        kitsTaken: (v.settings && Array.isArray(v.settings.kitsTaken)) ? v.settings.kitsTaken.filter((x) => typeof x === "string") : [],
         // set once the intro tour has been finished or skipped; synced, so it
         // doesn't reappear on a second device
         tourSeenAt: (v.settings && typeof v.settings.tourSeenAt === "string") ? v.settings.tourSeenAt : "",
@@ -746,6 +747,7 @@
       "revWrite","revKo","revAttemptH","revAttemptInput","revSubmit","revWriteMeta","revEditSetup","revPrior","revCompare",
       "revPassBefore","revPassAfter","revAddPassage","revHlToolbar",
       "patternsBtn","patternsCount","patternsView","patternsSub","patternsFilter","patternsStarFilter","patternsCats","patternList",
+      "libraryBtn","libraryCount","libraryView","librarySub","kitGrid",
       "wordsView","wordsSub","wordsFilter","wordsSort","wordsGrid","sentencesView","sentencesSub","sentencesFilter","sentenceList",
       "projectsBtn","projectsCount","projectsView","projectsSort","projectsFilter","projectsGrid","projectsKindFilter","projectsNewBtn",
       "projectDetailView","projectBackBtn","projectCuratorEditBtn","projectArtScroll",
@@ -797,10 +799,11 @@
   function renderRoute() {
     if (!user) return;
     const { name } = parseHash();
-    [D.emptyState, D.entryView, D.reverseView, D.wordsView, D.sentencesView, D.patternsView, D.projectsView, D.projectDetailView].forEach((v) => (v.hidden = true));
+    [D.emptyState, D.entryView, D.reverseView, D.wordsView, D.sentencesView, D.patternsView, D.libraryView, D.projectsView, D.projectDetailView].forEach((v) => (v.hidden = true));
     D.searchScrim.hidden = true;
-    [D.searchBtn, D.wordsBtn, D.sentencesBtn, D.patternsBtn, D.projectsBtn].forEach((b) => b.classList.remove("is-on"));
-    if (name === "patterns") { D.patternsBtn.classList.add("is-on"); D.patternsView.hidden = false; renderPatternsView(); }
+    [D.searchBtn, D.wordsBtn, D.sentencesBtn, D.patternsBtn, D.libraryBtn, D.projectsBtn].forEach((b) => b.classList.remove("is-on"));
+    if (name === "library") { D.libraryBtn.classList.add("is-on"); D.libraryView.hidden = false; renderLibraryView(); }
+    else if (name === "patterns") { D.patternsBtn.classList.add("is-on"); D.patternsView.hidden = false; renderPatternsView(); }
     else if (name === "words") { D.wordsBtn.classList.add("is-on"); D.wordsView.hidden = false; renderWordsView(); }
     else if (name === "sentences") { D.sentencesBtn.classList.add("is-on"); D.sentencesView.hidden = false; renderSentencesView(); }
     else if (name === "projects" || name === "art") {
@@ -2436,6 +2439,8 @@
     const pc = Array.isArray(state.patterns) ? state.patterns.length : 0;
     D.sentencesCount.textContent = sc ? String(sc) : "";
     D.patternsCount.textContent = pc ? String(pc) : "";
+    { const kn = (Array.isArray(window.PILSA_KITS) ? window.PILSA_KITS : []).length;
+      D.libraryCount.textContent = kn ? String(kn) : ""; }
     D.projectsCount.textContent = projectKeys.size ? String(projectKeys.size) : "";
   }
 
@@ -2737,6 +2742,65 @@
     openModal("새 프로젝트", wrap);
     refreshSourceDatalists();
     setTimeout(() => { try { wrap.querySelector("#npAuthor").focus(); } catch (_) {} }, 0);
+  }
+
+  /* ─────────────────────── 서가 (library) ─────────────────────── */
+  const kits = () => (Array.isArray(window.PILSA_KITS) ? window.PILSA_KITS : []);
+  const kitTaken = (id) => (state.settings.kitsTaken || []).includes(id);
+  function renderLibraryView() {
+    const all = kits();
+    D.librarySub.textContent = all.length
+      ? `${all.length}개의 꾸러미 · 가져오면 내 문서가 되어, 고치고 지울 수 있습니다`
+      : "아직 꾸러미가 없습니다.";
+    D.kitGrid.innerHTML = all.map((k) => {
+      const n = (k.items || []).length;
+      const taken = kitTaken(k.id);
+      return `<div class="kit-card${taken ? " is-taken" : ""}">
+        <div class="kit-card-top">
+          <span class="kit-kind kit-kind--${esc(k.kind)}">${k.kind === "reverse" ? "역번역" : "필사"}</span>
+          ${k.tag ? `<span class="kit-tag">${esc(k.tag)}</span>` : ""}
+          ${taken ? `<span class="kit-taken">가져옴</span>` : ""}
+        </div>
+        <div class="kit-title">${esc(k.title)}</div>
+        <div class="kit-blurb">${esc(k.blurb || "")}</div>
+        <div class="kit-foot">
+          <span class="kit-count">${n}문단</span>
+          ${k.note ? `<span class="kit-note">${esc(k.note)}</span>` : ""}
+          <button type="button" class="rev-btn rev-btn--primary kit-take" data-kit="${escAttr(k.id)}">${taken ? "다시 가져오기" : "가져오기"}</button>
+        </div>
+      </div>`;
+    }).join("");
+  }
+  function takeKit(id) {
+    const k = kits().find((x) => x.id === id);
+    if (!k || !Array.isArray(k.items) || !k.items.length) return;
+    if (kitTaken(k.id) && !confirm(`「${k.title}」은 이미 가져왔습니다.\n같은 내용으로 새 문서를 하나 더 만들까요?`)) return;
+
+    const e = blankEntry(k.kind);
+    if (k.source) {
+      e.source.author = k.source.author || "";
+      e.source.title = k.source.title || "";
+      e.source.page = k.source.page || "";
+    }
+    if (k.kind === "reverse") {
+      e.reverse = { passages: k.items.map((it) => normRevPassage({ koSource: it.ko || "", target: it.en || "" })) };
+    } else {
+      e.passages = k.items.map((it) => normPassage({ body: it.body || it.en || "" }));
+      const p0 = e.passages[0];
+      e.body = p0.body; e.highlights = p0.highlights; e.interpretation = p0.interpretation;
+      e.corrections = p0.corrections; e.threads = p0.threads;
+    }
+    state.entries.push(e);
+    const taken = new Set(state.settings.kitsTaken || []);
+    taken.add(k.id);
+    state.settings.kitsTaken = [...taken];
+    touchAppState();
+
+    currentId = e.id; revPassageId = null; revModeId = null; currentPassageId = null;
+    touchEntry(e); rememberOpen();
+    renderRecentList(); renderSidebarCounts();
+    toast(`「${k.title}」 ${k.items.length}문단을 가져왔습니다`);
+    go("#daily");
   }
 
   /* ─────────────────────── 나의 패턴 (pattern note) ─────────────────────── */
@@ -3147,6 +3211,8 @@
     D.wordsBtn.addEventListener("click", () => go("#words"));
     D.sentencesBtn.addEventListener("click", () => go("#sentences"));
     D.patternsBtn.addEventListener("click", () => go("#patterns"));
+    D.libraryBtn.addEventListener("click", () => go("#library"));
+    D.kitGrid.addEventListener("click", (ev) => { const b = ev.target.closest("[data-kit]"); if (b) takeKit(b.dataset.kit); });
     D.projectsBtn.addEventListener("click", () => go("#projects"));
     D.exportBtn.addEventListener("click", exportJSON);
     D.importBtn.addEventListener("click", () => D.importInput.click());
