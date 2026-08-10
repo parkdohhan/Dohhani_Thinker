@@ -136,8 +136,8 @@
   };
   const REV_STAGES = ["new", "d3", "d14", "done"];
   const REV_STAGE_LABEL = { new: "1차", d3: "3일", d14: "2주", done: "완료" };
-  const kindOf = (k) => (k === "reflection" || k === "reverse" ? k : "transcription");
-  const kindLabelOf = (k) => (k === "reflection" ? "사유" : k === "reverse" ? "역번역" : "필사");
+  const kindOf = (k) => (k === "reflection" || k === "reverse" || k === "speech" ? k : "transcription");
+  const kindLabelOf = (k) => (k === "reflection" ? "사유" : k === "reverse" ? "역번역" : k === "speech" ? "발표" : "필사");
   function plusDaysISO(days) {
     const d = new Date(todayISO() + "T00:00:00");
     d.setDate(d.getDate() + days);
@@ -158,6 +158,8 @@
       base.reflection = { mode: "correct", blocks: [{ id: uid(), kind: "user", text: "" }] };
     } else if (kind === "reverse") {
       base.reverse = { passages: [blankRevPassage()] };
+    } else if (kind === "speech") {
+      base.speech = normSpeech({});
     } else {
       const p0 = blankPassage();
       base.passages = [p0];
@@ -310,6 +312,28 @@
       : [normRevPassage(r)];
     return { passages };
   }
+  // kind: 'speech' — 발표 연습: a spoken run-through of a project's material,
+  // transcribed in the browser, hand-corrected, then reviewed by Claude against
+  // the project's sources. Audio itself is never stored — transcript only.
+  function normSpeechAnalysis(a) {
+    if (!a || typeof a !== "object") return null;
+    return {
+      verdict: typeof a.verdict === "string" ? a.verdict : "",
+      missed: Array.isArray(a.missed) ? a.missed.filter((x) => typeof x === "string").slice(0, 10) : [],
+      diffs: Array.isArray(a.diffs) ? a.diffs.map(normRevDiff) : [],
+    };
+  }
+  function normSpeech(s) {
+    s = s && typeof s === "object" ? s : {};
+    const dur = Number(s.durationSec);
+    return {
+      keywords: Array.isArray(s.keywords) ? s.keywords.filter((x) => typeof x === "string" && x.trim()).map((x) => x.trim()).slice(0, 12) : [],
+      durationSec: Number.isFinite(dur) && dur > 0 ? Math.floor(dur) : 0,
+      transcript: typeof s.transcript === "string" ? s.transcript : "",
+      rawTranscript: typeof s.rawTranscript === "string" ? s.rawTranscript : "",
+      analysis: normSpeechAnalysis(s.analysis),
+    };
+  }
   function normPattern(p) {
     p = p && typeof p === "object" ? p : {};
     const hits = Number(p.hits);
@@ -343,6 +367,8 @@
       out.reflection = normReflection(r);
     } else if (kind === "reverse") {
       out.reverse = normReverse(e.reverse);
+    } else if (kind === "speech") {
+      out.speech = normSpeech(e.speech);
     } else {
       let passages;
       if (Array.isArray(e.passages) && e.passages.length) {
@@ -411,7 +437,8 @@
   const currentEntry = () => findEntry(currentId);
   // 사유 was removed from the app. Existing reflection entries stay in `state.entries`
   // so they keep syncing and keep appearing in JSON backups — they're just never shown.
-  const isShown = (e) => e && e.kind !== "reflection";
+  // 발표 (speech) entries live only in their project's 오답노트, not in the daily flow.
+  const isShown = (e) => e && e.kind !== "reflection" && e.kind !== "speech";
   function orderedEntries() {
     return state.entries.filter(isShown).sort((a, b) => b.date.localeCompare(a.date) || String(b.createdAt).localeCompare(String(a.createdAt)));
   }
@@ -573,6 +600,8 @@
       data.reflection = e.reflection || { mode: "correct", blocks: [{ id: uid(), kind: "user", text: "" }] };
     } else if (e.kind === "reverse") {
       data.reverse = e.reverse && Array.isArray(e.reverse.passages) ? e.reverse : normReverse(e.reverse);
+    } else if (e.kind === "speech") {
+      data.speech = e.speech && typeof e.speech === "object" ? e.speech : normSpeech(e.speech);
     } else {
       syncTopLevelToPassage(e); // make sure passages[active] holds latest top-level edits
       data.passages = e.passages || [];
@@ -589,7 +618,7 @@
       // multi-passage document collapses to its first passage on the next pull.
       passages: d.passages,
       body: d.body, highlights: d.highlights, interpretation: d.interpretation, corrections: d.corrections,
-      threads: d.threads, messages: d.messages, reflection: d.reflection, reverse: d.reverse,
+      threads: d.threads, messages: d.messages, reflection: d.reflection, reverse: d.reverse, speech: d.speech,
       createdAt: r.created_at, updatedAt: r.updated_at });
   }
   async function pullAll() {
@@ -787,7 +816,7 @@
     } else D.modalActions.hidden = true;
     D.modalScrim.hidden = false;
   }
-  function closeModal() { D.modalScrim.hidden = true; D.modalBody.innerHTML = ""; }
+  function closeModal() { stopSpeechRec(); D.modalScrim.hidden = true; D.modalBody.innerHTML = ""; }
 
   /* ─────────────────────── ROUTER ─────────────────────── */
   function parseHash() {
@@ -2560,13 +2589,14 @@
       let p = map.get(key);
       if (!p) {
         const [a, t] = key.split("|");
-        p = { key, author: a, title: t, entries: [], lastUpdated: 0, transcriptionCount: 0, reverseCount: 0 };
+        p = { key, author: a, title: t, entries: [], lastUpdated: 0, transcriptionCount: 0, reverseCount: 0, speechCount: 0 };
         map.set(key, p);
       }
       p.entries.push(e);
       const u = +new Date(e.updatedAt || e.createdAt || 0);
       if (u > p.lastUpdated) p.lastUpdated = u;
       if (e.kind === "reverse") p.reverseCount++;
+      else if (e.kind === "speech") p.speechCount++;
       else p.transcriptionCount++;
     }
     return Array.from(map.values());
@@ -2639,6 +2669,7 @@
           <span>${total}개</span>
           ${p.transcriptionCount ? `<span class="dot-sep">·</span><span>필사 ${p.transcriptionCount}</span>` : ""}
           ${p.reverseCount ? `<span class="dot-sep">·</span><span>역번역 ${p.reverseCount}</span>` : ""}
+          ${p.speechCount ? `<span class="dot-sep">·</span><span>발표 ${p.speechCount}</span>` : ""}
           ${ago ? `<span class="dot-sep">·</span><span>${esc(ago)} 업데이트됨</span>` : ""}
         </div>
       </button>`;
@@ -2659,11 +2690,11 @@
       D.projectArtScroll.innerHTML = `<div class="art-empty">— 이 프로젝트가 없습니다. 엔트리가 모두 삭제되었거나 출처가 바뀌었습니다. —</div>`;
       return;
     }
-    const hasT = p.transcriptionCount > 0, hasR = p.reverseCount > 0;
-    let tab = projectDetailTab;
-    if (!hasR) tab = "archive";
-    else if (!hasT) tab = "notebook";
-    D.projectDetailTabs.hidden = !(hasT && hasR);
+    // The notebook tab is always reachable when there's an archive side too —
+    // a 필사-only project still needs somewhere to start a 발표 연습 from.
+    const hasT = p.transcriptionCount > 0;
+    const tab = hasT ? projectDetailTab : "notebook";
+    D.projectDetailTabs.hidden = !hasT;
     D.projectDetailTabs.querySelectorAll("button").forEach((b) => b.classList.toggle("is-on", b.dataset.tab === tab));
     // 오답노트 is a study page, not part of the Cha piece — drop the art skin there
     D.projectDetailView.classList.toggle("art-view", tab !== "notebook");
@@ -2724,7 +2755,7 @@
   /* 오답노트 — the study counterpart of the art archive: everything this project's
      역번역 drills say I got wrong, deduped the same way 나의 패턴 dedupes (patKey),
      so a repeated divergence reads as a count, not as noise. */
-  function renderProjectNotebook(p, to) {
+  function projectRevDigest(p) {
     const revs = p.entries.filter((e) => e.kind === "reverse").sort((a, b) =>
       a.date.localeCompare(b.date) || String(a.createdAt).localeCompare(String(b.createdAt)));
     const agg = new Map();
@@ -2747,20 +2778,35 @@
       }
     }
     const diffs = [...agg.values()];
+    diffs.sort((a, b) => b.count - a.count || String(b.last).localeCompare(String(a.last)));
+    return { revs, diffs, attemptCount, passageCount };
+  }
+  function renderProjectNotebook(p, to) {
+    const { revs, diffs, attemptCount, passageCount } = projectRevDigest(p);
     const catCount = {};
     for (const c of REV_CATEGORIES) catCount[c] = 0;
     for (const d of diffs) catCount[d.category] = (catCount[d.category] || 0) + d.count;
 
+    const speeches = p.entries.filter((e) => e.kind === "speech").sort((a, b) =>
+      b.date.localeCompare(a.date) || String(b.createdAt).localeCompare(String(a.createdAt)));
+
     let html = `<div class="nb">
       <header class="nb-head">
-        <h1 class="nb-title">${esc(projectTitle(p))} — 오답노트</h1>
-        <p class="nb-sub">역번역 ${revs.length}개 · 문단 ${passageCount} · 시도 ${attemptCount}회 · 갈림 ${diffs.length}종</p>
+        <div class="nb-title-row">
+          <h1 class="nb-title">${esc(projectTitle(p))} — 오답노트</h1>
+          <button type="button" class="rev-btn rev-btn--primary nb-speech-btn" data-speech-new="${escAttr(p.key)}">발표 연습</button>
+        </div>
+        <p class="nb-sub">역번역 ${revs.length}개 · 문단 ${passageCount} · 시도 ${attemptCount}회 · 갈림 ${diffs.length}종${speeches.length ? ` · 발표 ${speeches.length}회` : ""}</p>
         ${diffs.length ? `<div class="pat-cats nb-cats">${REV_CATEGORIES.map((c) => catCount[c]
           ? `<span class="pat-cat nb-cat cat-${c} is-on">${esc(REV_CAT_LABEL[c])}<span class="pat-cat-n">${catCount[c]}회</span></span>` : "").join("")}</div>` : ""}
       </header>`;
 
+    if (!revs.length && !speeches.length) {
+      html += `<div class="list-empty">아직 이 프로젝트의 공부 기록이 없습니다.<br/>역번역 문서를 제출하면 갈림이 모이고, <b>발표 연습</b>으로 말하기 기록을 시작할 수 있습니다.</div></div>`;
+      to.innerHTML = html; return;
+    }
+
     if (diffs.length) {
-      diffs.sort((a, b) => b.count - a.count || String(b.last).localeCompare(String(a.last)));
       html += `<div class="nb-h">반복 실수 — 많이 갈린 순</div><div class="nb-list">`;
       for (const d of diffs) {
         const filed = findPattern(patKey(d.mine, d.targetFrag));
@@ -2778,7 +2824,7 @@
         </div>`;
       }
       html += `</div>`;
-    } else {
+    } else if (revs.length) {
       html += `<div class="list-empty">아직 분석된 시도가 없습니다. 역번역 문단을 제출하면 갈림이 여기 모입니다.</div>`;
     }
 
@@ -2810,8 +2856,214 @@
         html += `</section>`;
       }
     }
+
+    if (speeches.length) {
+      html += `<div class="nb-h" id="nbSpeechSection">발표 기록</div>`;
+      for (const e of speeches) html += speechCardHtml(e);
+    }
     html += `</div>`;
     to.innerHTML = html;
+  }
+
+  // One 발표 record: date · duration · keywords · transcript (folded) · Claude's
+  // review — what the run missed, and spoken wordings with better alternatives.
+  function speechCardHtml(e) {
+    const sp = e.speech || normSpeech({});
+    const an = sp.analysis;
+    const busy = speechBusyIds.has(e.id);
+    const m = Math.floor(sp.durationSec / 60), s = sp.durationSec % 60;
+    const dur = sp.durationSec ? `${m ? m + "분 " : ""}${s}초` : "";
+    let body = "";
+    if (an) {
+      if (an.verdict) body += `<div class="nb-verdict">${esc(an.verdict)}</div>`;
+      if (an.missed.length) body += `<div class="nb-missed">
+        <div class="nb-missed-h">요점에서 빠지거나 어긋난 것</div>
+        <ul>${an.missed.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>
+      </div>`;
+      if (an.diffs.length) body += `<div class="nb-sp-diffs">` + an.diffs.map((d, i) => {
+        const filed = findPattern(patKey(d.mine, d.targetFrag));
+        return `<div class="nb-row">
+          <div class="pattern-row-top">
+            ${revCatBadge(d.category)}
+            ${filed
+              ? `<span class="rev-diff-filed">담김 · ${filed.hits}회</span>`
+              : `<button type="button" class="pattern-open nb-sp-file" data-speech-file="${escAttr(e.id)}" data-diff-i="${i}">담기</button>`}
+          </div>
+          <div class="rev-diff-pair">
+            <div class="rev-sent-row"><span class="rev-diff-lbl">말한</span><span class="rev-frag rev-x">${esc(d.mine) || "—"}</span></div>
+            <div class="rev-sent-row"><span class="rev-diff-lbl">나은</span><span class="rev-frag rev-o">${esc(d.targetFrag) || "—"}</span></div>
+          </div>
+          ${d.note ? `<div class="pattern-note">${esc(d.note)}</div>` : ""}
+        </div>`;
+      }).join("") + `</div>`;
+      if (!an.missed.length && !an.diffs.length && !an.verdict) body += `<div class="nb-verdict">분석이 비어 있습니다.</div>`;
+    } else if (busy) {
+      body += `<div class="nb-sp-busy">△ Claude 분석 중…</div>`;
+    } else {
+      body += `<div class="nb-sp-busy">분석이 없습니다.
+        <button type="button" class="pattern-open" data-speech-retry="${escAttr(e.id)}">분석 요청</button></div>`;
+    }
+    return `<section class="nb-doc nb-speech" data-speech="${escAttr(e.id)}">
+      <div class="nb-doc-head">
+        <span class="nb-doc-title">${esc(fmtDate(e.date))}${dur ? ` · ${dur}` : ""}</span>
+        <button type="button" class="pattern-del" data-speech-del="${escAttr(e.id)}" title="이 발표 기록 삭제">삭제</button>
+      </div>
+      ${sp.keywords.length ? `<div class="nb-kws">${sp.keywords.map((k) => `<span class="nb-kw">${esc(k)}</span>`).join("")}</div>` : ""}
+      ${sp.transcript ? `<details class="nb-sp-tr"><summary>전사본</summary><div class="nb-sp-text">${esc(sp.transcript)}</div></details>` : ""}
+      ${body}
+    </section>`;
+  }
+
+  /* ── 발표 연습: record (app stays silent) → hand-correct the transcript → Claude reviews
+     it against this project's sources. Audio is discarded; only the transcript is kept. ── */
+  const speechBusyIds = new Set();
+  let speechRec = null, speechRecWanted = false, speechTimer = null;
+  function stopSpeechRec() {
+    speechRecWanted = false;
+    if (speechRec) { try { speechRec.stop(); } catch (_) {} speechRec = null; }
+    if (speechTimer) { clearInterval(speechTimer); speechTimer = null; }
+  }
+  function openSpeechPractice(p) {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const wrap = document.createElement("div");
+    wrap.className = "sp";
+    wrap.innerHTML = `
+      <div class="sp-step" data-step="prep">
+        <p class="sp-hint">키워드 5~7개만 메모하고, 대본 없이 말합니다. 녹음 중에 앱은 아무것도 보여주지 않습니다 — 끝나면 전사본이 열리고, 그때 고칠 수 있습니다.</p>
+        <input class="new-project-input sp-keywords" placeholder="키워드 (쉼표로 구분 · 선택)" />
+        ${SR ? "" : `<p class="sp-warn">이 브라우저는 음성 인식(Web Speech API)을 지원하지 않습니다 — Chrome에서 열거나, 따로 녹음해 듣고 다음 단계에서 직접 옮겨 적으세요.</p>`}
+        <div class="rev-foot"><button type="button" class="rev-btn rev-btn--primary sp-start">${SR ? "녹음 시작" : "직접 옮겨 적기"}</button></div>
+      </div>
+      <div class="sp-step" data-step="rec" hidden>
+        <div class="sp-rec"><span class="sp-dot"></span><span class="sp-time">0:00</span></div>
+        <p class="sp-hint sp-hint--center">말하는 동안 화면은 이대로 있습니다.</p>
+        <div class="rev-foot"><button type="button" class="rev-btn rev-btn--primary sp-stop">정지</button></div>
+      </div>
+      <div class="sp-step" data-step="edit" hidden>
+        <div class="rev-h">전사본 — 실제로 말한 대로 고치기</div>
+        <textarea class="rev-setup-input sp-transcript" spellcheck="false" placeholder="여기 전사본이 들어옵니다. 인식이 뭉갠 부분을 실제로 말한 대로 고친 뒤 제출하세요."></textarea>
+        <div class="rev-foot">
+          <button type="button" class="rev-btn rev-btn--primary sp-submit">분석 요청</button>
+          <span class="rev-meta sp-meta"></span>
+        </div>
+      </div>`;
+    const q = (sel) => wrap.querySelector(sel);
+    const show = (name) => wrap.querySelectorAll(".sp-step").forEach((el) => (el.hidden = el.dataset.step !== name));
+    let t0 = 0, durationSec = 0, raw = "";
+    const finals = [];
+    q(".sp-start").addEventListener("click", () => {
+      if (!SR) { show("edit"); q(".sp-transcript").focus(); return; }
+      finals.length = 0;
+      speechRec = new SR();
+      speechRec.lang = "en-US";
+      speechRec.continuous = true;
+      speechRec.interimResults = false;
+      speechRec.onresult = (ev) => {
+        for (let i = ev.resultIndex; i < ev.results.length; i++)
+          if (ev.results[i].isFinal) finals.push(ev.results[i][0].transcript.trim());
+      };
+      // Chrome stops the recognizer after a pause — keep it alive until 정지 is pressed
+      speechRec.onend = () => { if (speechRecWanted && speechRec) { try { speechRec.start(); } catch (_) {} } };
+      speechRec.onerror = (ev) => {
+        if (ev.error === "not-allowed" || ev.error === "service-not-allowed") {
+          toast("마이크 권한이 없습니다 — 브라우저 설정에서 허용해 주세요");
+          stopSpeechRec(); show("edit"); q(".sp-transcript").focus();
+        }
+      };
+      speechRecWanted = true;
+      try { speechRec.start(); } catch (_) {}
+      t0 = Date.now();
+      const timeEl = q(".sp-time");
+      speechTimer = setInterval(() => {
+        const s = Math.floor((Date.now() - t0) / 1000);
+        timeEl.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+      }, 500);
+      show("rec");
+    });
+    q(".sp-stop").addEventListener("click", () => {
+      durationSec = Math.max(1, Math.round((Date.now() - t0) / 1000));
+      stopSpeechRec();
+      // final recognition results can trail the stop by a moment — give them a beat to land
+      setTimeout(() => {
+        raw = finals.join(" ").replace(/\s+/g, " ").trim();
+        const ta = q(".sp-transcript");
+        ta.value = raw;
+        q(".sp-meta").textContent = `${Math.floor(durationSec / 60)}분 ${durationSec % 60}초 · 인식된 그대로 — 고친 뒤 제출`;
+        show("edit"); ta.focus();
+      }, 400);
+    });
+    q(".sp-submit").addEventListener("click", () => {
+      const text = q(".sp-transcript").value.trim();
+      if (!text) { toast("전사본이 비어 있습니다"); return; }
+      const e = blankEntry("speech");
+      e.source = { author: p.author || "", title: p.title || "", page: "" };
+      e.speech.keywords = q(".sp-keywords").value.split(",").map((x) => x.trim()).filter(Boolean).slice(0, 12);
+      e.speech.durationSec = durationSec;
+      e.speech.rawTranscript = raw;
+      e.speech.transcript = text;
+      state.entries.push(e);
+      touchEntry(e);
+      closeModal();
+      projectDetailTab = "notebook";
+      const { name, arg } = parseHash();
+      if (name === "projects" && arg && arg.length) renderProjectDetailView(arg[0]);
+      runSpeechAnalysis(e);
+    });
+    openModal("발표 연습 — " + projectTitle(p), wrap);
+    setTimeout(() => q(".sp-keywords").focus(), 0);
+  }
+
+  async function runSpeechAnalysis(e) {
+    const sp = e.speech;
+    if (!sp || !sp.transcript.trim()) return;
+    speechBusyIds.add(e.id);
+    aiBusy++; // keep the auto-pull from swapping state.entries mid-call
+    rerenderOpenNotebook(e);
+    try {
+      const { data: sess } = await sb.auth.getSession();
+      const tok = sess && sess.session ? sess.session.access_token : null;
+      if (!tok) throw new Error("로그인이 필요합니다");
+      const p = getProjects().find((x) => x.key === projectKey(e));
+      // source material the talk is judged against: 역번역 targets + 필사 bodies
+      const sources = [];
+      if (p) {
+        for (const x of p.entries) {
+          if (x.kind === "reverse") { for (const ps of (x.reverse && x.reverse.passages) || []) if ((ps.target || "").trim()) sources.push(ps.target.trim()); }
+          else if (x.kind === "transcription") { for (const ps of x.passages || []) if ((ps.body || "").trim()) sources.push(ps.body.trim()); }
+        }
+      }
+      let budget = 9000;
+      const capped = [];
+      for (const s of sources) { if (budget <= 0) break; capped.push(s.slice(0, budget)); budget -= s.length; }
+      const patterns = (p ? projectRevDigest(p).diffs : []).slice(0, 8)
+        .map((d) => ({ mine: d.mine, targetFrag: d.targetFrag, category: d.category }));
+      const resp = await fetch(CLAUDE_FN, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", apikey: SUPABASE_KEY, Authorization: `Bearer ${tok}` },
+        body: JSON.stringify({
+          speech: true,
+          transcript: sp.transcript, keywords: sp.keywords,
+          sources: capped, patterns,
+          context: { author: e.source.author || "", title: e.source.title || "" },
+        }),
+      });
+      const out = await resp.json().catch(() => ({}));
+      if (!resp.ok || out.error) throw new Error((out && out.error) ? out.error : `요청 실패 (${resp.status})`);
+      sp.analysis = normSpeechAnalysis(out.speech || {});
+      touchEntry(e);
+      toast("발표 분석 완료");
+    } catch (err) {
+      toast("Claude 호출 실패 — " + (err.message || String(err)));
+    } finally {
+      speechBusyIds.delete(e.id);
+      aiBusy = Math.max(0, aiBusy - 1);
+      rerenderOpenNotebook(e);
+    }
+  }
+  function rerenderOpenNotebook(e) {
+    const { name, arg } = parseHash();
+    if (name === "projects" && arg && arg.length && arg[0] === projectKey(e) && projectDetailTab === "notebook")
+      renderProjectDetailView(arg[0]);
   }
 
   function openNewProjectModal() {
@@ -2990,7 +3242,7 @@
     searchState.from = D.chipFrom.value; searchState.to = D.chipTo.value; searchState.author = D.chipAuthor.value.trim();
     const ql = q.toLowerCase();
     let res = state.entries.filter((e) => {
-      if (e.kind === "reflection") return false; // 사유는 별도 아카이브에서 (step 7)
+      if (e.kind === "reflection" || e.kind === "speech") return false; // 사유·발표는 검색 밖 (발표는 프로젝트 오답노트에서)
       if (searchState.from && e.date < searchState.from) return false;
       if (searchState.to && e.date > searchState.to) return false;
       if (searchState.author && !e.source.author.toLowerCase().includes(searchState.author.toLowerCase())) return false;
@@ -3667,6 +3919,41 @@
       if (arg && arg.length) renderProjectDetailView(arg[0]);
     });
     D.projectArtScroll.addEventListener("click", (ev) => {
+      const spNew = ev.target.closest("[data-speech-new]");
+      if (spNew) {
+        const p = getProjects().find((x) => x.key === spNew.dataset.speechNew);
+        if (p) openSpeechPractice(p);
+        return;
+      }
+      const spFile = ev.target.closest("[data-speech-file]");
+      if (spFile) {
+        const e = findEntry(spFile.dataset.speechFile);
+        const d = e && e.speech && e.speech.analysis && e.speech.analysis.diffs[+spFile.dataset.diffI];
+        if (d) {
+          const r = filePattern(d, e.id);
+          touchAppState();
+          toast(r === "hit" ? "이미 있던 패턴 — 횟수를 올렸습니다" : "나의 패턴에 담았습니다");
+          renderSidebarCounts();
+          const { arg } = parseHash();
+          if (arg && arg.length) renderProjectDetailView(arg[0]);
+        }
+        return;
+      }
+      const spRetry = ev.target.closest("[data-speech-retry]");
+      if (spRetry) { const e = findEntry(spRetry.dataset.speechRetry); if (e) runSpeechAnalysis(e); return; }
+      const spDel = ev.target.closest("[data-speech-del]");
+      if (spDel) {
+        const e = findEntry(spDel.dataset.speechDel);
+        if (e && confirm(`이 발표 기록을 삭제할까요?\n\n${fmtDate(e.date)}\n\n되돌릴 수 없습니다.`)) {
+          state.entries = state.entries.filter((x) => x.id !== e.id);
+          deletedEntries.add(e.id); dirtyEntries.delete(e.id);
+          scheduleSync(); cacheLocal();
+          renderSidebarCounts();
+          const { arg } = parseHash();
+          if (arg && arg.length) renderProjectDetailView(arg[0]);
+        }
+        return;
+      }
       const openBtn = ev.target.closest("[data-open-entry]");
       if (openBtn) { go("#daily"); openEntry(openBtn.dataset.openEntry); return; }
       const pub = ev.target.closest("[data-pub]");

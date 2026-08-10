@@ -18,6 +18,7 @@ proxy live on **Supabase** (project `Dohhani_Thinker`, ref `ooqzmtgbhctsrghjnrda
 - **나의 문장** — every anchored Claude thread, as a browsable archive: click a sentence to see your interpretation + Claude's feedback (meaning / grammar / a better rendering). Exactly the "my words / my sentences" split.
 - **Search** — `⌘K`. Full-text over body · interpretation · source · Claude messages, with filter chips (highlight colour, has-Claude, date range, author).
 - **프로젝트** — entries group by author/title; opening one renders each kind in its own genre. 필사 → **아카이브 (Art mode)**: Cha-style (black/white, sparse, thin serif, Latin-footnote source citations), chronological numbered fragments, corrections as struck-through palimpsests (errors preserved), per-entry publish/hide toggle, a curator's note. 역번역 → **오답노트**: category totals as a per-source weakness map, every divergence deduped à la 나의 패턴 (same 갈림 = a repeat count, "나의 패턴에 담김" marked), and a per-문단 digest (stage · next revisit · Claude's verdict + better renderings). Mixed projects get an `아카이브 | 오답노트` toggle; reverse-only projects open straight into the notebook.
+- **발표 연습 (speech practice)** — started from a project's 오답노트. Jot 5–7 keywords, speak with no script — the app shows only a timer while the browser's Web Speech API transcribes locally (audio is never stored). Then hand-correct the transcript and submit: Claude reviews it against the project's source paragraphs — what the run **missed** (요점, in Korean), plus spoken wordings → better spoken alternatives in the same four categories, each filable into 나의 패턴, so writing and speaking share one weakness map. Records live only in the project's notebook (hidden from the daily flow and search).
 - **역번역 (reverse translation)** — a drill, not a piece of writing. Pair a Korean paragraph of your own with its English translation (the *target*), then reproduce the English from the Korean with the target hidden. On submit: a two-column word-diff, plus a Claude analysis that sorts every divergence into four categories (`lexis-register` / `connectives` / `structure` / `articles-prepositions`). Each finding shows **the whole sentence** it occurs in — your wording marked red, the target's green — with a 필사 box underneath to hand-copy the correct sentence. Fixed revisit schedule: +3 days, then +2 weeks. Attempts are append-only; the target is never in the DOM while you're writing.
 - **나의 패턴** — the divergences you chose to keep, deduped by `내 표현 → 목표 표현` so a repeated failure raises a counter instead of adding a row. Four category chips double as a weakness map.
 - **Errors preserved** — editing a saved interpretation pushes the prior version into the entry's `corrections`; visible in Art mode and via "n번 고쳐 씀 — 이전 해석 보기".
@@ -72,7 +73,7 @@ Redirect URLs) if you kept email confirmation on; otherwise nothing else to do.
 ### Data model (in `entries.data` jsonb, one row per entry)
 
 ```
-Entry  { id, date, kind:'transcription'|'reverse',    // legacy 'reflection' rows still exist — see below
+Entry  { id, date, kind:'transcription'|'reverse'|'speech',   // legacy 'reflection' rows still exist — see below
          source:{author,title,page}, createdAt, updatedAt }
 
 // kind: 'transcription' — one document, many passages
@@ -81,6 +82,11 @@ Entry  { id, date, kind:'transcription'|'reverse',    // legacy 'reflection' row
                    corrections:[{timestamp,previousText,newText}],
                    threads:[{id,anchorChar,anchorText,fromInterp,createdAt,messages:[…]}] }]
      + body / highlights / interpretation / corrections / threads   // mirror of the active passage
+
+// kind: 'speech' — 발표 연습 (recorded from a project's 오답노트; audio discarded)
+     + speech:{ keywords:[…], durationSec, transcript, rawTranscript,
+                analysis: null | { verdict, missed:[…],
+                                   diffs:[{mine,targetFrag,category,note}] } }
 
 // kind: 'reflection' — the removed 사유 mode (legacy). Old rows keep their
 //   reflection:{mode,blocks} data, still sync, and still appear in JSON backups —
@@ -107,5 +113,6 @@ Entry  { id, date, kind:'transcription'|'reverse',    // legacy 'reflection' row
 - Highlighting and "△ 묻기" happen in the body's **edit mode** (click the text to enter it). Read-mode hover gives tooltips + clickable △ anchors.
 - Editing *inside* an existing highlight clears that highlight (re-mark it); highlights before/after an edit shift correctly.
 - Sync is per-entry last-write-wins by `updatedAt` — fine for one user; not a CRDT.
+- 발표 연습 transcription uses the browser's Web Speech API — Chrome-family only. On other browsers the modal falls back to typing the transcript yourself. Audio is never saved.
 - Static export of the art view as a standalone HTML file isn't built yet (use JSON export for backup; the art view itself is the deliverable in-app).
 - The old `marginalia`-era tables in this Supabase project (`sessions`, `contexts`, …) are untouched and still have permissive policies — drop them in the dashboard if you don't need them.

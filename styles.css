@@ -730,6 +730,36 @@ a { color: inherit; }
 .nb-better { margin-top: 8px; display: flex; flex-direction: column; gap: 5px; }
 .nb-better-row { font-family: var(--font-serif); font-size: 13.5px; line-height: 1.7; color: var(--color-text-secondary); }
 .nb-better-row .tri { margin-right: 6px; color: var(--color-text-tertiary); font-size: 10px; }
+.nb-title-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
+.nb-speech-btn { flex: none; }
+
+/* 발표 기록 cards */
+.nb-kws { margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap; }
+.nb-kw { font-family: var(--font-mono); font-size: 10.5px; color: var(--color-text-tertiary); border: 0.5px solid var(--color-border-tertiary); border-radius: 3px; padding: 1px 7px; }
+.nb-sp-tr { margin-top: 10px; }
+.nb-sp-tr summary { font-family: var(--font-korean); font-size: 11.5px; color: var(--color-text-tertiary); cursor: pointer; user-select: none; }
+.nb-sp-tr summary:hover { color: var(--color-text-secondary); }
+.nb-sp-text { margin-top: 8px; font-family: var(--font-serif); font-size: 13.5px; line-height: 1.8; white-space: pre-wrap; color: var(--color-text-secondary); }
+.nb-missed { margin-top: 10px; }
+.nb-missed-h { font-family: var(--font-korean); font-size: 11px; letter-spacing: 0.1em; color: var(--color-text-tertiary); margin-bottom: 4px; }
+.nb-missed ul { margin: 0; padding-left: 18px; }
+.nb-missed li { font-family: var(--font-korean); font-size: 12.5px; line-height: 1.7; color: var(--color-text-secondary); }
+.nb-sp-diffs { margin-top: 6px; }
+.nb-sp-file { margin-left: auto; }
+.nb-sp-busy { margin-top: 10px; font-family: var(--font-korean); font-size: 12.5px; color: var(--color-text-tertiary); display: flex; align-items: center; gap: 8px; }
+
+/* 발표 연습 modal */
+.sp { display: flex; flex-direction: column; }
+.sp-hint { font-family: var(--font-korean); font-size: 12.5px; line-height: 1.7; color: var(--color-text-secondary); }
+.sp-hint--center { text-align: center; color: var(--color-text-tertiary); }
+.sp-warn { margin-top: 10px; font-family: var(--font-korean); font-size: 12px; line-height: 1.65; color: var(--color-text-warning); background: var(--color-background-warning); border-radius: 6px; padding: 8px 11px; }
+.sp-keywords { margin-top: 12px; }
+.sp .rev-foot { margin-top: 14px; }
+.sp-rec { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 26px 0 8px; }
+.sp-dot { width: 10px; height: 10px; border-radius: 50%; background: #d0342c; animation: sp-pulse 1.2s ease-in-out infinite; }
+@keyframes sp-pulse { 50% { opacity: 0.2; } }
+.sp-time { font-family: var(--font-mono); font-size: 28px; color: var(--color-text-primary); }
+.sp-transcript { min-height: 170px; }
 
 /* new-project modal cards: reuse the doc-picker look + add inputs above */
 .new-project-form { display: flex; flex-direction: column; gap: 14px; }

@@ -194,6 +194,93 @@ function normalizeReverseResult(parsed: any, fallbackText: string) {
   return out;
 }
 
+// === 발표 (speech practice) mode ===
+// The reader spoke freely (no script) about a project's material; the browser
+// transcribed it and they hand-corrected the transcript. We judge coverage
+// against the source paragraphs and the quality of the spoken English. JSON only.
+const SPEECH_PROMPT = `You are reviewing a spoken presentation drill. The reader is a Korean academic training to present their work in English. They spoke freely — no script, only a few keywords — about the source material below. The transcript comes from browser speech recognition and was hand-corrected, so ignore punctuation, capitalization, and minor transcription artifacts entirely.
+
+Judge two things:
+
+1. Coverage — against the source paragraphs: which key points were missed, garbled, or misordered. Each item goes in "missed", written in Korean, one sentence each. If coverage is complete, missed: [].
+
+2. Spoken expression — where the wording is unclear, imprecise, or below academic register: quote the reader's wording verbatim from the transcript ("mine") and give what a fluent speaker would actually SAY ("targetFrag") — natural spoken register, not written prose. Classify each into exactly one category:
+- "lexis-register": word choice, collocation, formality
+- "connectives": discourse markers, how ideas are joined in speech
+- "structure": clause order, sentence shape, information order
+- "articles-prepositions": a/an/the, singular/plural, preposition choice
+
+Do not nitpick disfluencies (fillers, repetition, false starts) unless they bury the point. Notes in Korean, plain analytic register (분석체 — no 존댓말, no praise); keep English words and terms in English.
+
+If recurring patterns from the reader's written drills are provided, watch for them specifically: one recurring in speech gets said in its note; one clearly improved gets mentioned in "verdict".
+
+Return STRICT JSON only — no markdown fences, no prose before or after. Schema:
+
+{
+  "verdict": "<한 줄 총평 — 이번 발표에서 가장 두드러진 경향 하나>",
+  "missed": ["<요점에서 빠지거나 어긋난 것 — 한국어 한 문장>"],
+  "diffs": [
+    {"mine": "<말한 표현 — transcript에서 그대로 인용>",
+     "targetFrag": "<말로 했을 법한 더 나은 표현>",
+     "category": "lexis-register",
+     "note": "<왜 그게 나은지 한 문장>"}
+  ]
+}
+
+At most 10 diffs, most important first. Return ONLY the JSON object.`;
+
+function buildSpeechSystem(ctx: any): string {
+  let base = SPEECH_PROMPT;
+  if (!ctx || typeof ctx !== "object") return base;
+  const src = [ctx.author, ctx.title].filter(Boolean).join(" · ");
+  if (src) base += `\n\n--- Context: the project this talk is about ---\n${src}`;
+  return base;
+}
+
+function buildSpeechUserMessage(
+  transcript: string,
+  keywords: string[],
+  sources: string[],
+  patterns: Array<{ mine: string; targetFrag: string; category: string }>,
+): string {
+  const parts: string[] = [];
+  if (sources.length) {
+    parts.push(`[Source paragraphs the talk should cover]\n` + sources.map((s, i) => `(${i + 1}) ${s}`).join("\n\n"));
+  }
+  if (keywords.length) parts.push(`[Keywords the reader planned to hit]\n${keywords.join(", ")}`);
+  if (patterns.length) {
+    parts.push(`[Recurring divergences from the reader's written drills — watch for these]\n` +
+      patterns.map((p) => `- "${p.mine}" → "${p.targetFrag}" (${p.category})`).join("\n"));
+  }
+  parts.push(`[Transcript of the talk]\n${transcript.trim()}`);
+  return parts.join("\n\n");
+}
+
+function normalizeSpeechResult(parsed: any, fallbackText: string) {
+  const CATEGORIES = ["lexis-register", "connectives", "structure", "articles-prepositions"];
+  const out: any = { verdict: "", missed: [], diffs: [] };
+  if (parsed && typeof parsed === "object") {
+    if (typeof parsed.verdict === "string") out.verdict = parsed.verdict;
+    if (Array.isArray(parsed.missed)) {
+      out.missed = parsed.missed.filter((x: any) => typeof x === "string").map((x: string) => x.slice(0, 500)).slice(0, 10);
+    }
+    if (Array.isArray(parsed.diffs)) {
+      out.diffs = parsed.diffs
+        .filter((x: any) => x && typeof x === "object")
+        .map((x: any) => ({
+          mine: typeof x.mine === "string" ? x.mine.slice(0, 400) : "",
+          targetFrag: typeof x.targetFrag === "string" ? x.targetFrag.slice(0, 400) : "",
+          category: CATEGORIES.includes(x.category) ? x.category : "lexis-register",
+          note: typeof x.note === "string" ? x.note.slice(0, 800) : "",
+        }))
+        .filter((x: any) => x.mine || x.targetFrag)
+        .slice(0, 10);
+    }
+  }
+  if (!parsed && fallbackText) out.verdict = fallbackText.slice(0, 1200);
+  return out;
+}
+
 // Appended to the system prompt when the frontend asks for structured "picks" —
 // the words/phrases the reader was unsure about, so they can be filed in 나의 단어 / 나의 문장.
 const EXTRACT_INSTRUCTION = `
@@ -279,14 +366,33 @@ Deno.serve(async (req) => {
   }
 
   const isReverse = payload?.reverse === true;
+  const isSpeech = !isReverse && payload?.speech === true;
   const reflect = typeof payload?.reflect === "string" ? payload.reflect : "";
-  const isReflect = !isReverse && (reflect === "correct" || reflect === "expand" || reflect === "deep");
-  const extract = !isReverse && !isReflect && payload?.extract === true;
+  const isReflect = !isReverse && !isSpeech && (reflect === "correct" || reflect === "expand" || reflect === "deep");
+  const extract = !isReverse && !isSpeech && !isReflect && payload?.extract === true;
 
   let messages: Array<{ role: string; content: string }>;
   let system: string;
 
-  if (isReverse) {
+  if (isSpeech) {
+    // 발표: the frontend sends the transcript + the project's material, not a conversation.
+    const transcript = typeof payload?.transcript === "string" ? payload.transcript : "";
+    if (!transcript.trim()) return json({ error: "`transcript` (the spoken text) is required." }, 400);
+    const keywords = (Array.isArray(payload?.keywords) ? payload.keywords : [])
+      .filter((x: any) => typeof x === "string" && x.trim()).slice(0, 12);
+    const sources = (Array.isArray(payload?.sources) ? payload.sources : [])
+      .filter((x: any) => typeof x === "string" && x.trim()).slice(0, 40);
+    const patterns = (Array.isArray(payload?.patterns) ? payload.patterns : [])
+      .filter((x: any) => x && typeof x === "object" && typeof x.mine === "string")
+      .map((x: any) => ({
+        mine: String(x.mine).slice(0, 200),
+        targetFrag: typeof x.targetFrag === "string" ? x.targetFrag.slice(0, 200) : "",
+        category: typeof x.category === "string" ? x.category : "",
+      }))
+      .slice(0, 8);
+    system = buildSpeechSystem(payload?.context);
+    messages = [{ role: "user", content: buildSpeechUserMessage(transcript, keywords, sources, patterns) }];
+  } else if (isReverse) {
     // 역번역: the frontend sends the drill itself, not a conversation.
     const koSource = typeof payload?.koSource === "string" ? payload.koSource : "";
     const target = typeof payload?.target === "string" ? payload.target : "";
@@ -353,6 +459,11 @@ Deno.serve(async (req) => {
 
   if (!text) return json({ error: "Empty response from Claude.", raw: out }, 502);
 
+  if (isSpeech) {
+    const parsed = parseReflectJSON(text); // same fence-stripping / first-{…} recovery
+    const result = normalizeSpeechResult(parsed, parsed ? "" : text);
+    return json({ speech: result, model: out?.model ?? MODEL, usage: out?.usage ?? null });
+  }
   if (isReverse) {
     const parsed = parseReflectJSON(text); // same fence-stripping / first-{…} recovery
     const result = normalizeReverseResult(parsed, parsed ? "" : text);
