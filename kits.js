@@ -17,6 +17,7 @@ window.PILSA_KITS = [
   {
     id: "sudogwan-1",
     kind: "reverse",
+    corpus: "literary",
     title: "수도관 필터 교체 요망 — 숲",
     blurb: "버려진 초가집과 마당의 작은 언덕. 묘사와 시점이 걸린 대목들입니다. 관사·시제·자동사 선택이 계속 발목을 잡습니다.",
     tag: "소설 · 묘사",
@@ -49,6 +50,7 @@ window.PILSA_KITS = [
   {
     id: "sudogwan-2",
     kind: "reverse",
+    corpus: "literary",
     title: "수도관 필터 교체 요망 — 몸과 박제",
     blurb: "박제사의 아들, 사람 안으로 들어가고 싶다는 충동, 그리고 손톱. 정의문과 반복 구문, 「~이 되고 싶었다」의 리듬을 영어로 어떻게 살릴지가 관건입니다.",
     tag: "소설 · 사유",
@@ -86,6 +88,7 @@ window.PILSA_KITS = [
   {
     id: "tem-framing",
     kind: "reverse",
+    corpus: "academic",
     title: "감정 궤적 이탈 측정 — 틀 잡기",
     blurb: "공백 진술, 연구 질문, 기여 선언. 논문이 자기 자리를 만드는 문장들입니다. 「~해 왔다」의 현재완료, 「~지 않았다」의 부정 완료, 무관사 추상명사가 반복해서 걸립니다.",
     tag: "논문 · 서론",
@@ -122,6 +125,7 @@ window.PILSA_KITS = [
   {
     id: "tem-argument",
     kind: "reverse",
+    corpus: "academic",
     title: "감정 궤적 이탈 측정 — 논증과 한계",
     blurb: "설계를 왜 그렇게 했는지 변호하는 문장, 그리고 스스로 한계를 긋는 문장. 「~이 아니라 ~이다」 구문과 조건절, 그리고 한계 선언 특유의 명사구 문장이 관건입니다.",
     tag: "논문 · 논증",

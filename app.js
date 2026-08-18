@@ -136,6 +136,13 @@
   };
   const REV_STAGES = ["new", "d3", "d14", "done"];
   const REV_STAGE_LABEL = { new: "1차", d3: "3일", d14: "2주", done: "완료" };
+  // 의미 보존 · 문법 정확 · register 적합 — 카드 하나가 받는 세 축 판정
+  const REV_AXES = ["meaning", "grammar", "register"];
+  const REV_AXIS_LABEL = { meaning: "의미", grammar: "문법", register: "격" };
+  // 코퍼스 — 문학/학술을 분리해서, register 판정 기준과 프로젝트 분류가 목표를 따라간다
+  const CORPUS_LABEL = { literary: "문학", academic: "학술" };
+  const corpusOf = (c, kind) =>
+    c === "academic" || c === "literary" ? c : (kind === "reverse" || kind === "speech" ? "academic" : "literary");
   const kindOf = (k) => (k === "reflection" || k === "reverse" || k === "speech" ? k : "transcription");
   const kindLabelOf = (k) => (k === "reflection" ? "사유" : k === "reverse" ? "역번역" : k === "speech" ? "발표" : "필사");
   function plusDaysISO(days) {
@@ -151,6 +158,7 @@
     const base = {
       id: uid(), date: todayISO(),
       kind,
+      corpus: corpusOf(null, kind),
       source: { author: "", title: "", page: "" },
       createdAt: t, updatedAt: t,
     };
@@ -252,15 +260,27 @@
     return { mode, blocks };
   }
   /* ── 역번역 normalization ── */
+  const normAxis = (v) => (v === "ok" ? "ok" : v === "off" ? "off" : ""); // "" = 판정 없음 (구버전 분석)
   function normRevDiff(d) {
     d = d && typeof d === "object" ? d : {};
     return {
       mine: typeof d.mine === "string" ? d.mine : "",
       targetFrag: typeof d.targetFrag === "string" ? d.targetFrag : "",
+      // 이 갈림에 대응하는 한국어 조각 — 나중에 한국어만 보고 재-역번역하는 회수 드릴의 씨앗
+      ko: typeof d.ko === "string" ? d.ko : "",
       category: REV_CATEGORIES.includes(d.category) ? d.category : "structure",
+      meaning: normAxis(d.meaning), grammar: normAxis(d.grammar), register: normAxis(d.register),
       note: typeof d.note === "string" ? d.note : "",
       // what the reader hand-copied of the correct sentence (their own, not the AI's)
       practice: typeof d.practice === "string" ? d.practice : "",
+    };
+  }
+  function normRevVariant(v) {
+    v = v && typeof v === "object" ? v : {};
+    return {
+      mine: typeof v.mine === "string" ? v.mine : "",
+      targetFrag: typeof v.targetFrag === "string" ? v.targetFrag : "",
+      note: typeof v.note === "string" ? v.note : "",
     };
   }
   function normRevAnalysis(a) {
@@ -268,16 +288,22 @@
     return {
       verdict: typeof a.verdict === "string" ? a.verdict : "",
       diffs: Array.isArray(a.diffs) ? a.diffs.map(normRevDiff) : [],
+      // 세 축이 모두 통과한 갈림 — 오류가 아니라 수용 가능한 변형
+      variants: Array.isArray(a.variants) ? a.variants.map(normRevVariant).filter((v) => v.mine || v.targetFrag) : [],
       better: Array.isArray(a.better) ? a.better.filter((x) => typeof x === "string") : [],
     };
   }
   function normRevAttempt(a) {
     a = a && typeof a === "object" ? a : {};
+    const analysis = normRevAnalysis(a.analysis);
     return {
       id: typeof a.id === "string" && a.id ? a.id : uid(),
       timestamp: a.timestamp || nowISO(),
       text: typeof a.text === "string" ? a.text : "",
-      analysis: normRevAnalysis(a.analysis),
+      analysis,
+      // 필사(맞는 문장 손으로 옮기기)를 다 마쳤는지 — 이게 true여야 다음 재시도 주기가 잡힌다.
+      // 구버전 시도(필드 없음)는 옛 규칙으로 이미 주기를 탔으므로 분석이 있으면 완료로 간주.
+      practiceDone: typeof a.practiceDone === "boolean" ? a.practiceDone : !!analysis,
     };
   }
   // One 문단 of a 역번역 document: the drill (koSource/target/attempts) plus the
@@ -341,12 +367,17 @@
       id: typeof p.id === "string" && p.id ? p.id : uid(),
       mine: typeof p.mine === "string" ? p.mine : "",
       targetFrag: typeof p.targetFrag === "string" ? p.targetFrag : "",
+      // 한국어 조각 — 있어야 회수(재-역번역) 드릴에 들어간다. 구버전 패턴엔 없음.
+      ko: typeof p.ko === "string" ? p.ko : "",
       category: REV_CATEGORIES.includes(p.category) ? p.category : "structure",
       note: typeof p.note === "string" ? p.note : "",
       starred: !!p.starred,
       sourceEntryId: typeof p.sourceEntryId === "string" ? p.sourceEntryId : "",
       createdAt: p.createdAt || nowISO(),
       hits: Number.isFinite(hits) && hits >= 1 ? Math.floor(hits) : 1,
+      // 담긴 것으로 끝나지 않도록: 담기는 순간 복습이 예약된다 (d3 → d14 → done)
+      reviewStage: p.reviewStage === "d14" || p.reviewStage === "done" ? p.reviewStage : "d3",
+      nextReview: typeof p.nextReview === "string" && p.nextReview ? p.nextReview.slice(0, 10) : null,
     };
   }
 
@@ -358,6 +389,7 @@
       id: typeof e.id === "string" ? e.id : uid(),
       date: typeof e.date === "string" && e.date ? e.date.slice(0, 10) : todayISO(),
       kind,
+      corpus: corpusOf(e.corpus, kind),
       source: { author: s.author || "", title: s.title || "", page: s.page || "" },
       createdAt: e.createdAt || nowISO(),
       updatedAt: e.updatedAt || e.createdAt || nowISO(),
@@ -595,7 +627,7 @@
 
   /* ─────────────────────── SUPABASE I/O ─────────────────────── */
   function entryToRow(e) {
-    const data = { kind: e.kind || "transcription", source: e.source };
+    const data = { kind: e.kind || "transcription", corpus: corpusOf(e.corpus, e.kind), source: e.source };
     if (e.kind === "reflection") {
       data.reflection = e.reflection || { mode: "correct", blocks: [{ id: uid(), kind: "user", text: "" }] };
     } else if (e.kind === "reverse") {
@@ -613,7 +645,7 @@
   }
   function rowToEntry(r) {
     const d = r.data || {};
-    return normEntry({ id: r.id, date: r.entry_date, kind: d.kind, source: d.source,
+    return normEntry({ id: r.id, date: r.entry_date, kind: d.kind, corpus: d.corpus, source: d.source,
       // `passages` MUST be read back — entryToRow writes it, and without it every
       // multi-passage document collapses to its first passage on the next pull.
       passages: d.passages,
@@ -772,6 +804,7 @@
       "bodyField","bodyRender","bodyEditWrap","bodyBackdrop","bodyInput","hlToolbar","slashMenu","slashMenuList","bodyHint","interpInput","interpSend","interpRevisions",
       "claudePanel","claudeHead","claudeTitle","claudeChevron","claudeBody","threadList","claudeCompose","claudeInput","claudeSend","claudeWarn","addParagraphBtn","passagesBefore","passagesAfter",
       "reverseView","revDate","revWeekday","revStageBadge","revDeleteBtn","revAuthor","revTitle","revPage",
+      "entryCorpusSeg","revCorpusSeg","projectsCorpusFilter",
       "revSetup","revSetupKo","revSetupTarget","revSetupSave","revSetupCancel",
       "revWrite","revKo","revAttemptH","revAttemptInput","revSubmit","revWriteMeta","revEditSetup","revPrior","revCompare",
       "revPassBefore","revPassAfter","revAddPassage","revHlToolbar",
@@ -994,6 +1027,27 @@
     return s;
   }
 
+  // 코퍼스 토글 — 문서가 어느 코퍼스(문학/학술)를 훈련하는지. register 판정 기준이 이걸 따른다.
+  function renderCorpusSeg(seg, e) {
+    if (!seg) return;
+    const c = corpusOf(e.corpus, e.kind);
+    seg.querySelectorAll("button").forEach((b) => b.classList.toggle("is-on", b.dataset.corpus === c));
+  }
+  function bindCorpusSeg(seg) {
+    if (!seg) return;
+    seg.addEventListener("click", (ev) => {
+      const b = ev.target.closest("button[data-corpus]"); if (!b) return;
+      const e = currentEntry(); if (!e) return;
+      if (corpusOf(e.corpus, e.kind) === b.dataset.corpus) return;
+      e.corpus = b.dataset.corpus;
+      touchEntry(e);
+      renderCorpusSeg(seg, e);
+      toast(b.dataset.corpus === "academic"
+        ? "학술 코퍼스 — 피드백이 학술 담화 기준(This suggests that… / We propose…)으로 판정됩니다"
+        : "문학 코퍼스 — 피드백이 문학적 register 기준으로 판정됩니다");
+    });
+  }
+
   function renderEntry() {
     const e = currentEntry(); if (!e) return;
     // make sure passages exist + an active passage is loaded into top-level
@@ -1005,6 +1059,7 @@
     }
     D.entryDate.value = e.date;
     D.entryWeekday.textContent = weekdayOf(e.date) ? "· " + weekdayOf(e.date) : "";
+    renderCorpusSeg(D.entryCorpusSeg, e);
     D.entryStatus.textContent = ""; D.entryStatus.classList.remove("show");
     D.srcAuthor.value = e.source.author; D.srcTitle.value = e.source.title; D.srcPage.value = e.source.page;
     editing = false;
@@ -1131,7 +1186,21 @@
       `<span class="${cls}">${esc(loc.sentence.slice(loc.at, loc.at + loc.len))}</span>` +
       esc(loc.sentence.slice(loc.at + loc.len));
   }
-  const revNormForMatch = (s) => String(s || "").toLowerCase().replace(/[\s]+/g, " ").replace(/[“”]/g, '"').replace(/[‘’]/g, "'").trim();
+  // 필사 검증: 대소문자·문장부호·공백만 normalize하고 나머지는 엄격 비교.
+  // 철자가 한 글자라도 다르면 ('tatke', 'has not brain') 일치로 통과되지 않는다.
+  const revNormForMatch = (s) => String(s || "")
+    .toLowerCase()
+    .replace(/[“”]/g, '"').replace(/[‘’]/g, "'")
+    .replace(/[.,;:!?"'()[\]{}«»—–\-…·]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  // 필사 완료 판정 — 진행 차단의 기준. 목표 조각이 없는 diff(내 쪽에만 있던 군더더기 등)는
+  // 옮겨 적을 문장 자체가 없으므로 완료로 간주한다 — 아니면 영구 차단 교착이 된다.
+  const diffPracticed = (d, model) => {
+    const m = revNormForMatch(model || d.targetFrag);
+    if (!m) return true;
+    return !!String(d.practice || "").trim() && revNormForMatch(d.practice) === m;
+  };
 
   /* ── pattern note (나의 패턴) ── */
   const patKey = (mine, frag) =>
@@ -1141,6 +1210,7 @@
     return state.patterns.find((p) => patKey(p.mine, p.targetFrag) === key) || null;
   }
   // Same mine→targetFrag pair filed again = a repeated failure, so bump hits instead of duplicating.
+  // 담는 순간 복습이 예약된다 — 컬렉션이 아니라 회수 루프의 입구. 반복 실패는 주기를 처음(+3일)으로 되돌린다.
   function filePattern(diff, entryId) {
     if (!Array.isArray(state.patterns)) state.patterns = [];
     const key = patKey(diff.mine, diff.targetFrag);
@@ -1148,14 +1218,20 @@
     if (hit) {
       hit.hits += 1;
       if (diff.note && !hit.note) hit.note = diff.note;
+      if (diff.ko && !hit.ko) hit.ko = diff.ko;
+      hit.reviewStage = "d3"; hit.nextReview = plusDaysISO(3);
       return "hit";
     }
     state.patterns.push(normPattern({
-      mine: diff.mine, targetFrag: diff.targetFrag, category: diff.category, note: diff.note,
+      mine: diff.mine, targetFrag: diff.targetFrag, ko: diff.ko || "", category: diff.category, note: diff.note,
       starred: false, sourceEntryId: entryId || "", createdAt: nowISO(), hits: 1,
+      reviewStage: "d3", nextReview: plusDaysISO(3),
     }));
     return "new";
   }
+  // 회수 드릴에 들어갈 수 있는 패턴: 한국어 조각이 있고, 복습일이 도래했고, 아직 주기가 안 끝난 것
+  const patDue = (p) => !!p.ko && !!p.nextReview && p.nextReview <= todayISO() && p.reviewStage !== "done";
+  const duePatterns = () => (Array.isArray(state.patterns) ? state.patterns.filter(patDue) : []);
 
   /* ── reverse entry view ── */
   let revMode = "write";          // "setup" | "write" | "compare"
@@ -1209,6 +1285,7 @@
 
     D.revDate.value = e.date;
     D.revWeekday.textContent = weekdayOf(e.date) ? "· " + weekdayOf(e.date) : "";
+    renderCorpusSeg(D.revCorpusSeg, e);
     D.revAuthor.value = e.source.author; D.revTitle.value = e.source.title; D.revPage.value = e.source.page;
     D.revStageBadge.hidden = false;
     D.revStageBadge.textContent = REV_STAGE_LABEL[rv.stage] || "1차";
@@ -1239,6 +1316,10 @@
       if (rv.attempts.length) bits.push(`지금까지 ${rv.attempts.length}번 제출`);
       if (rv.nextRevisit) bits.push(revDueOn(rv) ? "오늘 재시도" : `다음 재시도 ${fmtDate(rv.nextRevisit)}`);
       else if (rv.stage === "done") bits.push("주기 완료");
+      else {
+        const lastAn = [...rv.attempts].reverse().find((a) => a.analysis);
+        if (lastAn && !lastAn.practiceDone) bits.push("필사 미완 — 오류 문장을 다 옮겨 적어야 재시도가 예약됩니다");
+      }
       D.revWriteMeta.textContent = bits.join(" · ");
       renderRevPrior(e);
     } else {
@@ -1346,7 +1427,7 @@
       const n = a.analysis ? a.analysis.diffs.length : null;
       // read-only: fragments only, never whole target sentences — state A must stay covered
       const an = a.analysis
-        ? `<details class="rev-prior-analysis"><summary>분석 보기${n != null ? ` · 차이 ${n}개` : ""}</summary>${revAnalysisHtml(a.analysis, null)}</details>`
+        ? `<details class="rev-prior-analysis"><summary>분석 보기${n != null ? ` · 오류 ${n}개` : ""}</summary>${revAnalysisHtml(a.analysis, null)}</details>`
         : `<div class="rev-prior-noan">— 분석 없음</div>`;
       return `<div class="rev-prior-item">
         <div class="rev-prior-h">${i + 1}번째 시도 · ${esc(fmtDate(a.timestamp))} ${esc(String(a.timestamp).slice(11, 16))}</div>
@@ -1360,6 +1441,36 @@
 
   function revCatBadge(cat) {
     return `<span class="cat-badge cat-${esc(cat)}">${esc(REV_CAT_LABEL[cat] || cat)}</span>`;
+  }
+  // 카드 하나의 3축 판정 칩 — 구버전 분석(축 없음)이면 아무것도 그리지 않는다
+  function revAxisChips(d) {
+    if (!REV_AXES.some((a) => d[a])) return "";
+    return `<span class="rev-axes">` + REV_AXES.map((a) =>
+      d[a] ? `<span class="axis-chip axis-${d[a]}">${REV_AXIS_LABEL[a]} ${d[a] === "ok" ? "✓" : "✗"}</span>` : ""
+    ).join("") + `</span>`;
+  }
+  // 필사 검증의 기준 문장: target 안에서 찾은 문장 전체, 못 찾으면 조각 자체
+  function revPracticeModel(target, d) {
+    const loc = revLocate(target || "", d.targetFrag);
+    return loc ? loc.sentence : d.targetFrag;
+  }
+  function revPracticeRemaining(at, target) {
+    if (!at || !at.analysis) return 0;
+    return at.analysis.diffs.filter((d) => !diffPracticed(d, revPracticeModel(target, d))).length;
+  }
+  // 필사를 모두 마친 순간에만 다음 재시도 주기가 잡힌다 — 제출만으로는 진행되지 않는다.
+  function markAttemptPracticed(e, rv, at) {
+    if (at.practiceDone) return false;
+    at.practiceDone = true;
+    revAdvanceStage(rv);
+    touchEntry(e);
+    renderRecentList(); renderSidebarCounts();
+    if (currentId === e.id) {
+      D.revStageBadge.textContent = REV_STAGE_LABEL[rv.stage] || "1차";
+      D.revStageBadge.className = "rev-stage-badge stage-" + rv.stage + (revDueOn(rv) ? " is-due" : "");
+    }
+    toast(rv.nextRevisit ? `필사 완료 — 다음 재시도 ${fmtDate(rv.nextRevisit)} 예약` : "필사 완료 — 재시도 주기를 마쳤습니다");
+    return true;
   }
   // `ctx` = { entryId, attemptText, target } → live compare card (sentence context +
   // 담기 picker + 필사 box). `null` → read-only fragment pairs for the prior-attempt list.
@@ -1388,12 +1499,15 @@
             <div class="rev-sent-row"><span class="rev-diff-lbl">목표</span><span class="rev-sent">${tgtHtml || "<i>—</i>"}</span></div>
           </div>`;
           const model = tLoc ? tLoc.sentence : d.targetFrag;
-          const done = !!d.practice.trim() && revNormForMatch(d.practice) === revNormForMatch(model);
-          practice = `<div class="rev-practice${done ? " is-done" : ""}" data-model="${escAttr(model)}">
-            <div class="rev-practice-h">맞는 문장 필사${done ? `<span class="rev-practice-ok">✓ 일치</span>` : ""}</div>
-            <textarea class="rev-practice-input" data-rev-practice="${i}" spellcheck="false"
-              placeholder="위 목표 문장을 그대로 옮겨 적습니다.">${esc(d.practice)}</textarea>
-          </div>`;
+          if (revNormForMatch(model)) {
+            const done = diffPracticed(d, model);
+            const tried = !done && !!d.practice.trim();
+            practice = `<div class="rev-practice${done ? " is-done" : tried ? " is-off" : ""}" data-model="${escAttr(model)}">
+              <div class="rev-practice-h">맞는 문장 필사${done ? `<span class="rev-practice-ok">✓ 일치</span>` : tried ? `<span class="rev-practice-no">✗ 아직 다릅니다</span>` : ""}</div>
+              <textarea class="rev-practice-input" data-rev-practice="${i}" spellcheck="false"
+                placeholder="위 목표 문장을 그대로 옮겨 적습니다. 일치해야 다음으로 넘어갑니다.">${esc(d.practice)}</textarea>
+            </div>`;
+          }
         } else {
           pair = `<div class="rev-diff-pair">
             <div class="rev-sent-row"><span class="rev-diff-lbl">내</span><span class="rev-frag rev-x">${esc(d.mine) || "—"}</span></div>
@@ -1401,23 +1515,37 @@
           </div>`;
         }
         return `<div class="rev-diff">
-          <div class="rev-diff-top">${revCatBadge(d.category)}${pick}</div>
+          <div class="rev-diff-top">${revCatBadge(d.category)}${revAxisChips(d)}${pick}</div>
           ${pair}
           ${d.note ? `<div class="rev-diff-note">${esc(d.note)}</div>` : ""}
           ${practice}
         </div>`;
       }).join("") + `</div>`;
     } else {
-      html += `<div class="rev-none">— 유의미한 차이가 없습니다.</div>`;
+      html += `<div class="rev-none">— 오류가 없습니다.</div>`;
+    }
+    if (an.variants && an.variants.length) {
+      html += `<div class="rev-var-h">수용 가능한 변형 — 오류 아님</div><div class="rev-var-list">` +
+        an.variants.map((v) => `<div class="rev-variant">
+          <div class="rev-diff-pair">
+            <div class="rev-sent-row"><span class="rev-diff-lbl">내</span><span class="rev-frag rev-eq">${esc(v.mine) || "—"}</span></div>
+            <div class="rev-sent-row"><span class="rev-diff-lbl">목표</span><span class="rev-frag rev-eq">${esc(v.targetFrag) || "—"}</span></div>
+          </div>
+          ${v.note ? `<div class="rev-diff-note">${esc(v.note)}</div>` : ""}
+        </div>`).join("") + `</div>`;
     }
     if (an.better.length) {
       html += `<div class="rev-better-h">내 쪽이 나은 지점</div><ul class="rev-better">` +
         an.better.map((b) => `<li>${esc(b)}</li>`).join("") + `</ul>`;
     }
+    // 필사를 다 마쳐야 담기(그리고 재시도 예약)로 넘어간다 — 불일치 시 진행 차단
+    const remaining = ctx ? an.diffs.filter((d) => !diffPracticed(d, revPracticeModel(ctx.target, d))).length : 0;
+    const gateMsg = remaining
+      ? `<span class="rev-meta rev-gate" id="revPracticeGate">필사 ${an.diffs.length - remaining}/${an.diffs.length} — 모두 일치해야 담기·재시도 예약이 열립니다</span>` : "";
     if (unfiled) {
-      html += `<div class="rev-foot"><button type="button" class="rev-btn rev-btn--primary" id="revFileBtn">분석을 패턴 노트에 담기</button></div>`;
+      html += `<div class="rev-foot"><button type="button" class="rev-btn rev-btn--primary" id="revFileBtn"${remaining ? " disabled" : ""}>분석을 패턴 노트에 담기</button>${gateMsg}</div>`;
     } else if (ctx && an.diffs.length) {
-      html += `<div class="rev-foot"><span class="rev-meta">이 분석의 갈림은 모두 「나의 패턴」에 있습니다</span></div>`;
+      html += `<div class="rev-foot"><span class="rev-meta">이 분석의 갈림은 모두 「나의 패턴」에 있습니다</span>${gateMsg}</div>`;
     }
     return html;
   }
@@ -1431,9 +1559,30 @@
     const prev = idx > 0 ? rv.attempts[idx - 1] : null;
     if (prev && prev.analysis && at.analysis) {
       const diffNow = at.analysis.diffs.length, diffPrev = prev.analysis.diffs.length;
-      delta = diffNow < diffPrev ? `이전보다 지적 ${diffPrev - diffNow}개 줄었습니다`
-        : diffNow > diffPrev ? `이전보다 지적 ${diffNow - diffPrev}개 늘었습니다`
-        : "이전과 지적 수가 같습니다";
+      delta = diffNow < diffPrev ? `이전보다 오류 ${diffPrev - diffNow}개 줄었습니다`
+        : diffNow > diffPrev ? `이전보다 오류 ${diffNow - diffPrev}개 늘었습니다`
+        : "이전과 오류 수가 같습니다";
+    }
+    // 상단 지표는 카드 판정(오류 유형별 카운트)이다. 단어 diff는 구조 선택 차이까지
+    // 전부 세는 노이즈라서 지표로 쓰지 않는다 — 아래에서 시각 보조로만 남는다.
+    let scoreline = "";
+    if (at.analysis) {
+      const an = at.analysis;
+      const catCounts = {}; REV_CATEGORIES.forEach((c) => (catCounts[c] = 0));
+      const axCounts = { meaning: 0, grammar: 0, register: 0 };
+      for (const df of an.diffs) {
+        catCounts[df.category] = (catCounts[df.category] || 0) + 1;
+        for (const a of REV_AXES) if (df[a] === "off") axCounts[a]++;
+      }
+      const hasAxes = an.diffs.some((df) => REV_AXES.some((a) => df[a]));
+      scoreline = `<div class="rev-scoreline">
+        <span class="rev-score-main${an.diffs.length ? "" : " is-clean"}">오류 ${an.diffs.length}개</span>
+        ${REV_CATEGORIES.filter((c) => catCounts[c]).map((c) =>
+          `<span class="pat-cat cat-${c} is-on">${esc(REV_CAT_LABEL[c])}<span class="pat-cat-n">${catCounts[c]}</span></span>`).join("")}
+        ${hasAxes ? REV_AXES.filter((a) => axCounts[a]).map((a) =>
+          `<span class="axis-chip axis-off">${REV_AXIS_LABEL[a]} ✗ ${axCounts[a]}</span>`).join("") : ""}
+        ${an.variants && an.variants.length ? `<span class="rev-score-var">수용 변형 ${an.variants.length}</span>` : ""}
+      </div>`;
     }
     const analysis = at.analysis
       ? revAnalysisHtml(at.analysis, { entryId: e.id, attemptText: at.text, target: rv.target })
@@ -1452,6 +1601,7 @@
         ${delta ? `<span class="rev-cmp-delta">${esc(delta)}</span>` : ""}
         <button type="button" class="rev-btn rev-btn--ghost" id="revBackToWrite">다시 쓰기</button>
       </div>
+      ${scoreline}
       <div class="rev-cols">
         <div class="rev-col">
           <div class="rev-col-h">내 시도</div>
@@ -1472,7 +1622,7 @@
             : `<div class="rev-col-body rev-target-read" data-revtarget>${wdRender(d.b, d.right, "wd-ins")}</div>`}
         </div>
       </div>
-      <div class="rev-note-small">${d.skipped ? "문단이 너무 길어 단어 대조는 건너뛰었습니다." : `단어 차이 ${d.changes}개`}
+      <div class="rev-note-small">${d.skipped ? "문단이 너무 길어 단어 대조는 건너뛰었습니다." : "색칠은 시각 보조일 뿐 — 구조 선택이 다르면 뜻이 통해도 붉게 보입니다. 오류 수는 위 카드 판정을 따릅니다."}
         <span class="rev-mark-hint">· 목표 영문을 드래그하면 🟡 단어 · 🔵 구절 · △ 묻기</span></div>
       <div class="rev-analysis">${analysis}</div>
 
@@ -1528,10 +1678,10 @@
     if (!text) { D.revAttemptInput.focus(); toast("먼저 영어로 옮겨 적어 주세요"); return; }
     if (!rv.target.trim()) { revMode = "setup"; renderReverseEntry(); return; }
 
-    // append-only: the attempt is recorded before Claude is called, and never rewritten
-    const at = normRevAttempt({ id: uid(), timestamp: nowISO(), text, analysis: null });
+    // append-only: the attempt is recorded before Claude is called, and never rewritten.
+    // 주기는 여기서 진행되지 않는다 — 오류 문장 필사를 다 마쳐야(markAttemptPracticed) 잡힌다.
+    const at = normRevAttempt({ id: uid(), timestamp: nowISO(), text, analysis: null, practiceDone: false });
     rv.attempts.push(at);
-    revAdvanceStage(rv);
     revDrafts.delete(e.id);
     touchEntry(e);
 
@@ -1561,6 +1711,7 @@
         body: JSON.stringify({
           reverse: true,
           koSource: rv.koSource, target: rv.target, attempt: at.text, priorAttempts: prior,
+          corpus: corpusOf(e.corpus, e.kind),
           context: { author: e.source.author || "", title: e.source.title || "", page: e.source.page || "" },
         }),
       });
@@ -1569,6 +1720,9 @@
       at.analysis = normRevAnalysis(out.reverse || {});
       touchEntry(e);
       toast("대조 분석 완료");
+      // 옮겨 적을 문장이 하나도 없으면(오류 0개, 또는 전부 목표 조각 없는 diff)
+      // 필사 단계가 없으므로 바로 다음 재시도 주기가 잡힌다
+      if (!revPracticeRemaining(at, rv.target)) markAttemptPracticed(e, rv, at);
     } catch (err) {
       toast("Claude 호출 실패 — " + (err.message || String(err)));
     } finally {
@@ -1811,6 +1965,9 @@
     const e = currentEntry(); if (!e || e.kind !== "reverse") return;
     const at = shownAttempt();
     if (!at || !at.analysis) return;
+    // 진행 차단: 틀린 필사를 남겨 둔 채로는 담기지 않는다
+    const remaining = revPracticeRemaining(at, reverseOf(e).target);
+    if (remaining) { toast(`필사가 ${remaining}개 남았습니다 — 맞는 문장을 모두 옮겨 적어야 담깁니다`); return; }
     const picked = [...D.revCompare.querySelectorAll("input[data-rev-diff]")]
       .filter((c) => c.checked)
       .map((c) => at.analysis.diffs[+c.dataset.revDiff])
@@ -2451,10 +2608,15 @@
   function renderRevisitList() {
     const due = state.entries.filter(revIsDue)
       .sort((a, b) => String(revEntryNextRevisit(a)).localeCompare(String(revEntryNextRevisit(b))));
-    D.revisitBlock.hidden = !due.length;
-    if (!due.length) { D.revisitList.innerHTML = ""; return; }
+    const dueP = duePatterns().length;
+    D.revisitBlock.hidden = !due.length && !dueP;
+    if (!due.length && !dueP) { D.revisitList.innerHTML = ""; return; }
     const today = todayISO();
-    D.revisitList.innerHTML = due.map((e) => recentItemHtml(e, today)).join("");
+    D.revisitList.innerHTML = due.map((e) => recentItemHtml(e, today)).join("") +
+      (dueP ? `<li><button type="button" class="recent-item recent-item--patrev" data-goto="patterns">
+        <span class="recent-item-date"><span class="recent-dot"></span>복습</span>
+        <span class="recent-item-src">패턴 ${dueP}개 — 한국어만 보고 다시</span>
+      </button></li>` : "");
   }
   function renderSidebarCounts() {
     D.wordsCount.textContent = state.terms.length ? String(state.terms.length) : "";
@@ -2575,7 +2737,7 @@
   }
 
   /* ─────────────────────── 프로젝트 ─────────────────────── */
-  let projectsState = { sort: "activity", filter: "", kind: "all" };
+  let projectsState = { sort: "activity", filter: "", kind: "all", corpus: "all" };
   function projectKey(e) {
     const a = (e.source && e.source.author || "").trim();
     const t = (e.source && e.source.title || "").trim();
@@ -2589,7 +2751,7 @@
       let p = map.get(key);
       if (!p) {
         const [a, t] = key.split("|");
-        p = { key, author: a, title: t, entries: [], lastUpdated: 0, transcriptionCount: 0, reverseCount: 0, speechCount: 0 };
+        p = { key, author: a, title: t, entries: [], lastUpdated: 0, transcriptionCount: 0, reverseCount: 0, speechCount: 0, literaryCount: 0, academicCount: 0 };
         map.set(key, p);
       }
       p.entries.push(e);
@@ -2598,6 +2760,8 @@
       if (e.kind === "reverse") p.reverseCount++;
       else if (e.kind === "speech") p.speechCount++;
       else p.transcriptionCount++;
+      if (corpusOf(e.corpus, e.kind) === "academic") p.academicCount++;
+      else p.literaryCount++;
     }
     return Array.from(map.values());
   }
@@ -2637,11 +2801,14 @@
     D.projectsSort.value = projectsState.sort;
     D.projectsFilter.value = projectsState.filter || "";
     D.projectsKindFilter.querySelectorAll("button").forEach((b) => b.classList.toggle("is-on", b.dataset.kind === projectsState.kind));
+    D.projectsCorpusFilter.querySelectorAll("button").forEach((b) => b.classList.toggle("is-on", b.dataset.corpus === projectsState.corpus));
 
     const f = (projectsState.filter || "").trim().toLowerCase();
     let list = getProjects();
     if (projectsState.kind === "transcription") list = list.filter((p) => p.transcriptionCount > 0);
     else if (projectsState.kind === "reverse") list = list.filter((p) => p.reverseCount > 0);
+    if (projectsState.corpus === "academic") list = list.filter((p) => p.academicCount > 0);
+    else if (projectsState.corpus === "literary") list = list.filter((p) => p.literaryCount > 0);
     if (f) list = list.filter((p) => projectTitle(p).toLowerCase().includes(f) || projectExcerpt(p).toLowerCase().includes(f));
     if (projectsState.sort === "name") list.sort((a, b) => projectTitle(a).localeCompare(projectTitle(b), "ko"));
     else if (projectsState.sort === "count") list.sort((a, b) => b.entries.length - a.entries.length);
@@ -2660,9 +2827,14 @@
       const desc = projectExcerpt(p);
       const total = p.entries.length;
       const ago = humanAgo(p.lastUpdated);
+      const corpusChip = p.academicCount && p.literaryCount
+        ? `<span class="corpus-chip corpus-mixed">문학·학술</span>`
+        : p.academicCount ? `<span class="corpus-chip corpus-academic">학술</span>`
+        : `<span class="corpus-chip corpus-literary">문학</span>`;
       return `<button type="button" class="project-card" data-project="${escAttr(slug)}">
         <div class="project-card-title-row">
           <span class="project-card-title">${esc(title)}</span>
+          ${corpusChip}
         </div>
         <div class="project-card-desc">${esc(desc)}</div>
         <div class="project-card-foot">
@@ -3120,6 +3292,7 @@
       return `<div class="kit-card${taken ? " is-taken" : ""}">
         <div class="kit-card-top">
           <span class="kit-kind kit-kind--${esc(k.kind)}">${k.kind === "reverse" ? "역번역" : "필사"}</span>
+          ${k.corpus ? `<span class="corpus-chip corpus-${esc(k.corpus)}">${esc(CORPUS_LABEL[k.corpus] || k.corpus)}</span>` : ""}
           ${k.tag ? `<span class="kit-tag">${esc(k.tag)}</span>` : ""}
           ${taken ? `<span class="kit-taken">가져옴</span>` : ""}
         </div>
@@ -3139,6 +3312,7 @@
     if (kitTaken(k.id) && !confirm(`「${k.title}」은 이미 가져왔습니다.\n같은 내용으로 새 문서를 하나 더 만들까요?`)) return;
 
     const e = blankEntry(k.kind);
+    e.corpus = corpusOf(k.corpus, k.kind);
     if (k.source) {
       e.source.author = k.source.author || "";
       e.source.title = k.source.title || "";
@@ -3167,10 +3341,39 @@
 
   /* ─────────────────────── 나의 패턴 (pattern note) ─────────────────────── */
   let patternsState = { filter: "", cat: "all", star: "all" };
+  // 복습 드릴의 화면 상태 — 어떤 카드가 정답을 깠는지, 쓰다 만 시도문
+  const patReviewUI = { open: new Set(), drafts: new Map() };
+  // copy는 얕고 retrieval이 정착을 만든다 — 담긴 패턴은 시차를 두고
+  // 한국어 조각만 보여 주고 다시 영어로 만들게 한다. 자기 채점(맞았다/틀렸다)으로
+  // 주기를 진행시킨다: 정답은 하나가 아니므로 문자열 일치로 처벌하지 않는다.
+  function patReviewCardHtml(p) {
+    const revealed = patReviewUI.open.has(p.id);
+    const draft = patReviewUI.drafts.get(p.id) || "";
+    const id = escAttr(p.id);
+    return `<div class="pat-review-card" data-patrevcard="${id}">
+      <div class="pat-review-top">${revCatBadge(p.category)}${p.hits > 1 ? `<span class="pattern-hits">${p.hits}회 반복</span>` : ""}
+        <span class="pat-review-stage">${p.reviewStage === "d14" ? "2주 복습" : "3일 복습"}</span></div>
+      <div class="pat-review-ko">${esc(p.ko)}</div>
+      ${revealed
+        ? `${draft.trim() ? `<div class="pat-review-mine"><span class="rev-diff-lbl">이번</span><span class="rev-frag">${esc(draft)}</span></div>` : ""}
+           <div class="rev-diff-pair">
+             <div class="rev-sent-row"><span class="rev-diff-lbl">전에</span><span class="rev-frag rev-x">${esc(p.mine) || "—"}</span></div>
+             <div class="rev-sent-row"><span class="rev-diff-lbl">목표</span><span class="rev-frag rev-o">${esc(p.targetFrag) || "—"}</span></div>
+           </div>
+           ${p.note ? `<div class="pattern-note">${esc(p.note)}</div>` : ""}
+           <div class="pat-review-foot">
+             <button type="button" class="rev-btn rev-btn--primary" data-patrev-ok="${id}">맞았다 — ${p.reviewStage === "d3" ? "2주 뒤 한 번 더" : "주기 완료"}</button>
+             <button type="button" class="rev-btn rev-btn--ghost" data-patrev-again="${id}">틀렸다 — 3일 뒤 다시</button>
+           </div>`
+        : `<textarea class="pat-review-input" data-patrev-input="${id}" spellcheck="false"
+             placeholder="정답을 보지 않고, 위 한국어를 영어로 다시 만들어 봅니다.">${esc(draft)}</textarea>
+           <div class="pat-review-foot"><button type="button" class="rev-btn" data-patrev-reveal="${id}">정답 대조</button></div>`}
+    </div>`;
+  }
   function renderPatternsView() {
     if (!Array.isArray(state.patterns)) state.patterns = [];
     const all = state.patterns;
-    D.patternsSub.textContent = `${all.length}개의 패턴 · 역번역 대조에서 담은 것들 — 같은 갈림이 반복되면 횟수가 올라갑니다`;
+    D.patternsSub.textContent = `${all.length}개의 패턴 · 담기는 순간 복습(3일 → 2주)이 예약됩니다 — 같은 갈림이 반복되면 횟수가 올라갑니다`;
     D.patternsFilter.value = patternsState.filter;
     D.patternsStarFilter.querySelectorAll("button").forEach((b) => b.classList.toggle("is-on", b.dataset.star === patternsState.star));
 
@@ -3191,11 +3394,19 @@
     if (f) list = list.filter((p) => (p.mine + " " + p.targetFrag + " " + p.note).toLowerCase().includes(f));
     list.sort((a, b) => (b.starred ? 1 : 0) - (a.starred ? 1 : 0) || b.hits - a.hits || String(b.createdAt).localeCompare(String(a.createdAt)));
 
+    // 오늘 복습 — 컬렉션에서 끝나지 않도록, 도래한 패턴을 맨 위에서 회수시킨다
+    const due = duePatterns().sort((a, b) => String(a.nextReview).localeCompare(String(b.nextReview)));
+    const reviewHtml = due.length
+      ? `<div class="pat-review" id="patReview">
+          <div class="pat-review-h">오늘 복습 · ${due.length}개 — 한국어만 보고 다시 영어로</div>
+          ${due.map(patReviewCardHtml).join("")}
+        </div>` : "";
+
     if (!list.length) {
-      D.patternList.innerHTML = `<div class="list-empty">${all.length ? "거른 결과가 없습니다." : "아직 담은 패턴이 없습니다. 역번역 문서를 제출하고, 대조 분석에서 “분석을 패턴 노트에 담기”를 누르면 여기 모입니다."}</div>`;
+      D.patternList.innerHTML = reviewHtml + `<div class="list-empty">${all.length ? "거른 결과가 없습니다." : "아직 담은 패턴이 없습니다. 역번역 문서를 제출하고, 대조 분석에서 “분석을 패턴 노트에 담기”를 누르면 여기 모입니다."}</div>`;
       return;
     }
-    D.patternList.innerHTML = list.map((p) => {
+    D.patternList.innerHTML = reviewHtml + list.map((p) => {
       const src = findEntry(p.sourceEntryId);
       return `<div class="pattern-row${p.starred ? " is-starred" : ""}" data-pat="${escAttr(p.id)}">
         <div class="pattern-row-top">
@@ -3211,6 +3422,9 @@
         ${p.note ? `<div class="pattern-note">${esc(p.note)}</div>` : ""}
         <div class="pattern-foot">
           <span>${esc(fmtDate(p.createdAt))}</span>
+          ${!p.ko ? `<span title="한국어 조각이 없어 복습 드릴에 들어가지 않습니다 (구버전·발표 패턴)">복습 대상 아님</span>`
+            : p.reviewStage === "done" ? `<span class="pat-rev-done">복습 완료</span>`
+            : p.nextReview ? `<span>다음 복습 ${esc(fmtDate(p.nextReview))}</span>` : ""}
           ${src ? `<button type="button" class="pattern-open" data-open-entry="${escAttr(src.id)}">${esc(srcLabel(src) || "이 역번역")} 열기 →</button>` : ""}
         </div>
       </div>`;
@@ -3588,7 +3802,11 @@
     D.tourSkip.addEventListener("click", closeTour);
     D.tour.addEventListener("mousedown", (ev) => { if (ev.target === D.tour) closeTour(); });
     D.recentList.addEventListener("click", (ev) => { const b = ev.target.closest(".recent-item"); if (b) openEntry(b.dataset.id); });
-    D.revisitList.addEventListener("click", (ev) => { const b = ev.target.closest(".recent-item"); if (b) { go("#daily"); openEntry(b.dataset.id); } });
+    D.revisitList.addEventListener("click", (ev) => {
+      const b = ev.target.closest(".recent-item"); if (!b) return;
+      if (b.dataset.goto === "patterns") { go("#patterns"); autoCloseSidebarIfNarrow(); return; }
+      go("#daily"); openEntry(b.dataset.id);
+    });
 
     // entry header
     D.deleteEntryBtn.addEventListener("click", deleteCurrentEntry);
@@ -3718,7 +3936,9 @@
       if (ev.target.id === "revInterpInput" && (ev.metaKey || ev.ctrlKey) && ev.key === "Enter") { ev.preventDefault(); sendRevInterp(); }
     });
 
-    // 필사 칸 — the reader hand-copies the correct sentence; saved onto that diff
+    // 필사 칸 — the reader hand-copies the correct sentence; saved onto that diff.
+    // normalize(대소문자·문장부호) 후 엄격 비교 — 틀린 필사는 ✗ 로 남고, 전부 일치해야
+    // 담기 버튼이 열리고 다음 재시도 주기가 잡힌다.
     D.revCompare.addEventListener("input", (ev) => {
       const ta = ev.target.closest("[data-rev-practice]"); if (!ta) return;
       const e = currentEntry(); if (!e || e.kind !== "reverse") return;
@@ -3727,15 +3947,31 @@
       d.practice = ta.value;
       autoGrow(ta, 260);
       touchEntry(e);
-      // flip the ✓ without re-rendering the whole panel (would blow away focus)
+      // flip the ✓/✗ without re-rendering the whole panel (would blow away focus)
       const wrap = ta.closest(".rev-practice");
       const model = wrap.dataset.model || "";
-      const done = !!d.practice.trim() && revNormForMatch(d.practice) === revNormForMatch(model);
+      const done = diffPracticed(d, model);
+      const tried = !done && !!d.practice.trim();
       wrap.classList.toggle("is-done", done);
+      wrap.classList.toggle("is-off", tried);
       const h = wrap.querySelector(".rev-practice-h");
       const ok = h && h.querySelector(".rev-practice-ok");
+      const no = h && h.querySelector(".rev-practice-no");
       if (done && !ok) h.insertAdjacentHTML("beforeend", `<span class="rev-practice-ok">✓ 일치</span>`);
       else if (!done && ok) ok.remove();
+      if (tried && !no) h.insertAdjacentHTML("beforeend", `<span class="rev-practice-no">✗ 아직 다릅니다</span>`);
+      else if (!tried && no) no.remove();
+      // 진행 게이트 갱신
+      const rv = reverseOf(e);
+      const remaining = revPracticeRemaining(at, rv.target);
+      const gate = $("revPracticeGate");
+      if (gate) {
+        if (remaining) gate.textContent = `필사 ${at.analysis.diffs.length - remaining}/${at.analysis.diffs.length} — 모두 일치해야 담기·재시도 예약이 열립니다`;
+        else gate.remove();
+      }
+      const fb = $("revFileBtn");
+      if (fb) fb.disabled = remaining > 0;
+      if (!remaining) markAttemptPracticed(e, rv, at);
     });
 
     // patterns view
@@ -3748,7 +3984,43 @@
       const b = ev.target.closest("button[data-cat]"); if (!b) return;
       patternsState.cat = b.dataset.cat; renderPatternsView();
     });
+    // 복습 드릴 — 쓰는 중 초안 보관
+    D.patternList.addEventListener("input", (ev) => {
+      const ta = ev.target.closest("[data-patrev-input]"); if (!ta) return;
+      patReviewUI.drafts.set(ta.dataset.patrevInput, ta.value);
+      autoGrow(ta, 200);
+    });
     D.patternList.addEventListener("click", (ev) => {
+      const reveal = ev.target.closest("[data-patrev-reveal]");
+      if (reveal) {
+        const id = reveal.dataset.patrevReveal;
+        patReviewUI.open.add(id);
+        // 카드 하나만 다시 그린다 — 다른 카드의 초안 포커스를 지키기 위해
+        const p = state.patterns.find((x) => x.id === id);
+        const card = D.patternList.querySelector(`[data-patrevcard="${CSS.escape(id)}"]`);
+        if (p && card) card.outerHTML = patReviewCardHtml(p);
+        return;
+      }
+      const ok = ev.target.closest("[data-patrev-ok]");
+      const again = ev.target.closest("[data-patrev-again]");
+      if (ok || again) {
+        const id = (ok || again).dataset.patrevOk || (ok || again).dataset.patrevAgain;
+        const p = state.patterns.find((x) => x.id === id); if (!p) return;
+        if (ok) {
+          if (p.reviewStage === "d3") { p.reviewStage = "d14"; p.nextReview = plusDaysISO(14); }
+          else { p.reviewStage = "done"; p.nextReview = null; }
+        } else {
+          p.hits += 1;
+          p.reviewStage = "d3"; p.nextReview = plusDaysISO(3);
+        }
+        patReviewUI.open.delete(id); patReviewUI.drafts.delete(id);
+        touchAppState();
+        renderPatternsView(); renderSidebarCounts(); renderRevisitList();
+        toast(ok
+          ? (p.reviewStage === "done" ? "복습 주기 완료" : `다음 복습 ${fmtDate(p.nextReview)}`)
+          : `3일 뒤 다시 나옵니다 — 반복 ${p.hits}회`);
+        return;
+      }
       const open = ev.target.closest("[data-open-entry]"); if (open) { go("#daily"); openEntry(open.dataset.openEntry); return; }
       const star = ev.target.closest("[data-pat-star]");
       if (star) {
@@ -3897,6 +4169,14 @@
       projectsState.kind = b.dataset.kind;
       renderProjectsView();
     });
+    D.projectsCorpusFilter.addEventListener("click", (ev) => {
+      const b = ev.target.closest("button[data-corpus]"); if (!b) return;
+      projectsState.corpus = b.dataset.corpus;
+      renderProjectsView();
+    });
+    // 코퍼스 토글 (문학/학술) — 문서 헤더
+    bindCorpusSeg(D.entryCorpusSeg);
+    bindCorpusSeg(D.revCorpusSeg);
     D.projectsNewBtn.addEventListener("click", openNewProjectModal);
     D.projectsGrid.addEventListener("click", (ev) => {
       const card = ev.target.closest(".project-card");

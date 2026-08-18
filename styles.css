@@ -1203,3 +1203,98 @@ a { color: inherit; }
 @media (max-width: 820px) {
   .app:not(.sidebar-forced-open) .sidebar { width: 0; min-width: 0; overflow: hidden; border-right: none; }
 }
+
+/* ═══════════ 역번역 개편: 카드 판정 지표 · 3축 칩 · 수용 변형 · 필사 게이트 ═══════════ */
+/* 상단 지표 — 카드 판정(오류 유형별 카운트). 단어 diff는 지표가 아니라 시각 보조. */
+.rev-scoreline {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin: 0 0 14px; padding: 10px 12px;
+  background: var(--color-background-secondary);
+  border: 0.5px solid var(--color-border-tertiary); border-radius: 6px;
+}
+.rev-score-main {
+  font-family: var(--font-korean); font-size: 13.5px; font-weight: 600;
+  color: var(--wd-del-fg);
+}
+.rev-score-main.is-clean { color: var(--color-text-success); }
+.rev-score-var {
+  font-family: var(--font-korean); font-size: 11px;
+  color: var(--color-text-success); background: var(--color-background-success);
+  border-radius: 10px; padding: 1px 9px;
+}
+
+/* 카드별 3축 판정 (의미 · 문법 · 격) */
+.rev-axes { display: inline-flex; gap: 4px; margin-left: 6px; }
+.axis-chip {
+  font-family: var(--font-korean); font-size: 10px; letter-spacing: 0.04em;
+  border-radius: 3px; padding: 1px 6px;
+}
+.axis-chip.axis-ok { background: var(--color-background-success); color: var(--color-text-success); }
+.axis-chip.axis-off { background: var(--wd-del-bg); color: var(--wd-del-fg); }
+
+/* 수용 가능한 변형 — 오류로 처벌하지 않는 갈림 */
+.rev-var-h {
+  margin-top: 18px; margin-bottom: 6px;
+  font-family: var(--font-korean); font-size: 11px; letter-spacing: 0.18em;
+  text-transform: uppercase; color: var(--color-text-success);
+}
+.rev-var-list { display: flex; flex-direction: column; gap: 10px; }
+.rev-variant {
+  border: 0.5px solid var(--color-border-tertiary); border-left: 2px solid var(--color-text-success);
+  border-radius: 4px; padding: 9px 11px; background: var(--color-background-primary);
+}
+.rev-frag.rev-eq { background: var(--color-background-secondary); color: var(--color-text-secondary); }
+
+/* 필사 검증 — 불일치는 ✗ 로 남고, 전부 일치해야 담기·재시도 예약이 열린다 */
+.rev-practice-no {
+  letter-spacing: 0.02em; text-transform: none; font-size: 10.5px;
+  color: var(--wd-del-fg); background: var(--wd-del-bg); border-radius: 3px; padding: 0 6px;
+}
+.rev-practice.is-off .rev-practice-input { border-color: var(--wd-del-fg); }
+.rev-btn[disabled] { opacity: 0.45; cursor: not-allowed; }
+.rev-gate { color: var(--color-text-warning); }
+
+/* 나의 패턴 — 오늘 복습 (한국어만 보고 재-역번역하는 회수 드릴) */
+.pat-review {
+  margin-bottom: 26px; padding: 14px 16px;
+  border: 0.5px solid var(--color-border-secondary); border-radius: 8px;
+  background: var(--color-background-secondary);
+}
+.pat-review-h {
+  font-family: var(--font-korean); font-size: 11px; letter-spacing: 0.18em;
+  text-transform: uppercase; color: var(--color-text-warning); margin-bottom: 12px;
+}
+.pat-review-card {
+  padding: 12px 0; border-top: 0.5px dashed var(--color-border-tertiary);
+}
+.pat-review-card:first-of-type { border-top: none; padding-top: 2px; }
+.pat-review-top { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.pat-review-stage { margin-left: auto; font-family: var(--font-mono); font-size: 10px; color: var(--color-text-tertiary); }
+.pat-review-ko {
+  font-family: var(--font-korean); font-size: 14px; line-height: 1.75;
+  color: var(--color-text-primary); margin-bottom: 9px;
+}
+.pat-review-input {
+  width: 100%; min-height: 44px; resize: vertical;
+  font-family: var(--font-mono); font-size: 12.5px; line-height: 1.7;
+  color: var(--color-text-primary); background: var(--color-background-primary);
+  border: 0.5px solid var(--color-border-tertiary); border-radius: 4px;
+  padding: 8px 10px; outline: none;
+}
+.pat-review-input:focus { border-color: var(--color-text-tertiary); }
+.pat-review-input::placeholder { color: var(--color-text-tertiary); font-family: var(--font-korean); }
+.pat-review-foot { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.pat-review-mine { display: flex; gap: 8px; align-items: baseline; margin-bottom: 6px; }
+.pat-rev-done { color: var(--color-text-success); }
+
+/* 코퍼스 (문학/학술) — 헤더 토글 · 프로젝트/서가 칩 */
+.corpus-seg { margin-left: 10px; }
+.corpus-seg button { padding: 3px 9px; font-size: 11px; }
+.corpus-chip {
+  font-family: var(--font-korean); font-size: 10px; letter-spacing: 0.05em;
+  border-radius: 3px; padding: 1px 7px; white-space: nowrap;
+}
+.corpus-chip.corpus-academic { background: var(--color-background-info); color: var(--color-text-info); }
+.corpus-chip.corpus-literary { background: var(--color-background-secondary); color: var(--color-text-secondary); border: 0.5px solid var(--color-border-tertiary); }
+.corpus-chip.corpus-mixed { background: var(--color-background-secondary); color: var(--color-text-tertiary); border: 0.5px solid var(--color-border-tertiary); }
+.recent-item--patrev .recent-item-src { color: var(--color-text-warning); }

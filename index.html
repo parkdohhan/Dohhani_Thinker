@@ -136,6 +136,10 @@
         <div class="entry-meta">
           <input type="date" class="entry-date" id="entryDate" />
           <span class="entry-weekday" id="entryWeekday"></span>
+          <span class="seg corpus-seg" id="entryCorpusSeg" title="이 문서가 훈련하는 코퍼스 — 피드백의 register 기준이 달라집니다">
+            <button type="button" data-corpus="literary">문학</button>
+            <button type="button" data-corpus="academic">학술</button>
+          </span>
           <span class="entry-status" id="entryStatus"></span>
           <button class="entry-delete" id="deleteEntryBtn" title="이 필사 삭제">
             <svg viewBox="0 0 24 24" class="icon"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13M9 7V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3"/></svg>
@@ -227,6 +231,10 @@
           <input type="date" class="entry-date" id="revDate" />
           <span class="entry-weekday" id="revWeekday"></span>
           <span class="rev-stage-badge" id="revStageBadge" hidden></span>
+          <span class="seg corpus-seg" id="revCorpusSeg" title="이 드릴이 훈련하는 코퍼스 — 12월 목표가 학술 발표면 학술을 고르세요. register 판정 기준이 달라집니다">
+            <button type="button" data-corpus="literary">문학</button>
+            <button type="button" data-corpus="academic">학술</button>
+          </span>
           <button class="entry-delete" id="revDeleteBtn" title="이 역번역 삭제">
             <svg viewBox="0 0 24 24" class="icon"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13M9 7V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3"/></svg>
           </button>
@@ -367,6 +375,11 @@
           <button data-kind="all" class="is-on">전체</button>
           <button data-kind="transcription">필사</button>
           <button data-kind="reverse">역번역</button>
+        </div>
+        <div class="seg" id="projectsCorpusFilter">
+          <button data-corpus="all" class="is-on">전체</button>
+          <button data-corpus="academic">학술</button>
+          <button data-corpus="literary">문학</button>
         </div>
       </div>
       <div class="projects-search">

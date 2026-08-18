@@ -112,17 +112,25 @@ function normalizeReflectResult(parsed: any, mode: string, fallbackText: string)
 // we compare their attempt against the target. JSON only.
 const REVERSE_PROMPT = `You are analyzing a Korean→English reverse-translation drill. The reader is a Korean academic writer training to produce English prose. They were shown only the Korean source and wrote an English version from it; the "target" is a separate English translation of the same Korean.
 
-Compare the reader's attempt against the target and account for every meaningful difference. Be precise and concise. Write the notes in Korean, in plain analytic register (분석체 — no 존댓말, no praise, no filler); keep English words, phrases and grammatical terms in English.
+The goal is the reader's ENGLISH PRODUCTION ABILITY — not convergence on this one target text. The target is one acceptable rendering, not an answer key. Judge every meaningful difference on three axes:
 
-Classify each difference into exactly one category:
-- "lexis-register": word choice, collocation, formality/academic register
+- meaning: does the reader's wording preserve the sense of the Korean source? ("ok" / "off")
+- grammar: is the reader's wording grammatically correct English on its own? ("ok" / "off")
+- register: does it fit the register of this corpus (see below)? ("ok" / "off")
+
+A difference where ALL THREE axes are "ok" is an ACCEPTABLE VARIANT — a legitimate alternative rendering (e.g. a relative clause where the target nominalizes, "I took on the job" where the target is more formal but the corpus allows it). Put those in "variants", NOT in "diffs", with one sentence on the flavor difference. Never treat a structural choice as an error merely because it diverges from the target.
+
+"diffs" is ONLY for differences where at least one axis is "off". For each, also classify into exactly one category:
+- "lexis-register": word choice, collocation, formality/register
 - "connectives": however / thus / whereas / that is — discourse markers and how clauses are joined
 - "structure": clause order, nominalization vs. verb, voice, sentence splitting/merging, information order
 - "articles-prepositions": a/an/the, singular/plural, and preposition choice
 
-The target is itself a machine translation — it is NOT an infallible answer key. Where the reader's wording is as good as or better than the target, put it in "better" instead of "diffs" and say why in Korean.
+For each diff also quote "ko" — the fragment of the Korean source this divergence corresponds to, copied verbatim from the Korean source (the shortest span that carries it). It seeds a later Korean-only retrieval drill, so it must stand alone as a prompt.
 
-Ignore trivial differences: capitalization, punctuation style, obvious typos, and pure whitespace.
+Where the reader's wording is clearly BETTER than the target, put it in "better" and say why in Korean.
+
+Be precise and concise. Write all notes in Korean, plain analytic register (분석체 — no 존댓말, no praise, no filler); keep English words, phrases and grammatical terms in English. Ignore trivial differences: capitalization, punctuation style, obvious typos, pure whitespace.
 
 Return STRICT JSON only — no markdown fences, no prose before or after. Schema:
 
@@ -131,16 +139,29 @@ Return STRICT JSON only — no markdown fences, no prose before or after. Schema
   "diffs": [
     {"mine": "<내 표현 — attempt에서 그대로 인용>",
      "targetFrag": "<대응하는 target 표현 — target에서 그대로 인용>",
+     "ko": "<대응하는 한국어 조각 — Korean source에서 그대로 인용>",
      "category": "lexis-register",
-     "note": "<왜 갈렸는지 한 문장>"}
+     "meaning": "ok", "grammar": "off", "register": "ok",
+     "note": "<왜 오류인지 한 문장>"}
   ],
-  "better": ["<내 출력이 target보다 낫거나 동등한 지점 — 한 문장씩>"]
+  "variants": [
+    {"mine": "<내 표현>", "targetFrag": "<target 표현>",
+     "note": "<뉘앙스 차이 한 문장 — 오류 아님>"}
+  ],
+  "better": ["<내 출력이 target보다 나은 지점 — 한 문장씩>"]
 }
 
-At most 12 diffs; put the ones that matter most first. If nothing differs meaningfully, return diffs: []. Return ONLY the JSON object.`;
+At most 12 diffs and 8 variants; the diffs that matter most first. If nothing differs meaningfully, return diffs: [] and variants: []. Return ONLY the JSON object.`;
 
-function buildReverseSystem(ctx: any): string {
+const REVERSE_REGISTER_ACADEMIC = `--- Register standard for this drill: ACADEMIC ---
+This corpus trains ACADEMIC English (papers, conference talks). Judge the register axis against academic discourse norms: hedging and claim verbs (This suggests that…, We propose…, The results indicate…), nominal style where the genre expects it, precise connectives. If the target uses a LITERARY idiom (e.g. "by virtue of having one"-style turns), do NOT hold the reader to it — a plainer academic paraphrase with the same meaning passes the register axis, and if the reader's version is more standard academic prose than the target's, note it in "better". Prioritize divergences that would hurt an academic paper or talk.`;
+
+const REVERSE_REGISTER_LITERARY = `--- Register standard for this drill: LITERARY ---
+This corpus trains LITERARY English. Judge the register axis against literary prose norms: rhythm, image, idiom, tonal control. A grammatically clean but flat paraphrase of a marked stylistic choice may fail the register axis — say what is lost.`;
+
+function buildReverseSystem(ctx: any, corpus: string): string {
   let base = REVERSE_PROMPT;
+  base += `\n\n` + (corpus === "literary" ? REVERSE_REGISTER_LITERARY : REVERSE_REGISTER_ACADEMIC);
   if (!ctx || typeof ctx !== "object") return base;
   const src = [ctx.author, ctx.title, ctx.page].filter(Boolean).join(" · ");
   if (src) base += `\n\n--- Context: the paper / section this paragraph comes from ---\n${src}`;
@@ -170,7 +191,8 @@ function buildReverseUserMessage(
 
 function normalizeReverseResult(parsed: any, fallbackText: string) {
   const CATEGORIES = ["lexis-register", "connectives", "structure", "articles-prepositions"];
-  const out: any = { verdict: "", diffs: [], better: [] };
+  const axis = (v: any) => (v === "ok" ? "ok" : v === "off" ? "off" : "");
+  const out: any = { verdict: "", diffs: [], variants: [], better: [] };
   if (parsed && typeof parsed === "object") {
     if (typeof parsed.verdict === "string") out.verdict = parsed.verdict;
     if (Array.isArray(parsed.diffs)) {
@@ -179,11 +201,31 @@ function normalizeReverseResult(parsed: any, fallbackText: string) {
         .map((x: any) => ({
           mine: typeof x.mine === "string" ? x.mine.slice(0, 400) : "",
           targetFrag: typeof x.targetFrag === "string" ? x.targetFrag.slice(0, 400) : "",
+          ko: typeof x.ko === "string" ? x.ko.slice(0, 400) : "",
           category: CATEGORIES.includes(x.category) ? x.category : "structure",
+          meaning: axis(x.meaning), grammar: axis(x.grammar), register: axis(x.register),
           note: typeof x.note === "string" ? x.note.slice(0, 800) : "",
         }))
         .filter((x: any) => x.mine || x.targetFrag)
         .slice(0, 12);
+      // a diff whose three axes all came back "ok" is by definition a variant —
+      // move it there even if the model filed it wrong
+      const misfiled = out.diffs.filter((x: any) => x.meaning === "ok" && x.grammar === "ok" && x.register === "ok");
+      if (misfiled.length) {
+        out.diffs = out.diffs.filter((x: any) => !(x.meaning === "ok" && x.grammar === "ok" && x.register === "ok"));
+        out.variants.push(...misfiled.map((x: any) => ({ mine: x.mine, targetFrag: x.targetFrag, note: x.note })));
+      }
+    }
+    if (Array.isArray(parsed.variants)) {
+      out.variants.push(...parsed.variants
+        .filter((x: any) => x && typeof x === "object")
+        .map((x: any) => ({
+          mine: typeof x.mine === "string" ? x.mine.slice(0, 400) : "",
+          targetFrag: typeof x.targetFrag === "string" ? x.targetFrag.slice(0, 400) : "",
+          note: typeof x.note === "string" ? x.note.slice(0, 800) : "",
+        }))
+        .filter((x: any) => x.mine || x.targetFrag));
+      out.variants = out.variants.slice(0, 8);
     }
     if (Array.isArray(parsed.better)) {
       out.better = parsed.better.filter((x: any) => typeof x === "string").map((x: string) => x.slice(0, 500)).slice(0, 6);
@@ -402,7 +444,8 @@ Deno.serve(async (req) => {
     const priorAttempts = (Array.isArray(payload?.priorAttempts) ? payload.priorAttempts : [])
       .filter((x: any) => typeof x === "string" && x.trim())
       .slice(-3);
-    system = buildReverseSystem(payload?.context);
+    const corpus = payload?.corpus === "literary" ? "literary" : "academic";
+    system = buildReverseSystem(payload?.context, corpus);
     messages = [{ role: "user", content: buildReverseUserMessage(koSource, target, attempt, priorAttempts) }];
   } else {
     const turns = Array.isArray(payload?.messages) ? payload.messages : null;
