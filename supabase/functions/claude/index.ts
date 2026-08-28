@@ -21,6 +21,10 @@ const ANTHROPIC_API_KEY =
 const MODEL = Deno.env.get("PILSA_CLAUDE_MODEL") ?? "claude-sonnet-4-6";
 const ANTHROPIC_VERSION = "2023-06-01";
 const MAX_TOKENS = 1800;
+// Structured modes (역번역·발표·사유) return whole card sets with Korean notes — far
+// more output than a chat turn. Too low a cap cuts the JSON off mid-array, and a
+// truncated array parses as nothing at all.
+const MAX_TOKENS_JSON = 4096;
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -78,6 +82,31 @@ function parseReflectJSON(text: string): any | null {
   const m = /\{[\s\S]*\}/.exec(s);
   if (m) { try { return JSON.parse(m[0]); } catch { /* fall through */ } }
   return null;
+}
+
+// When the JSON got cut off (max_tokens) or is otherwise malformed, recover what
+// is recoverable: the verdict string and every *complete* card. Cards never nest,
+// so a `{…}` with no inner braces is exactly one card; the cut-off tail simply
+// fails to parse and is dropped.
+function salvageJSON(text: string): any | null {
+  if (!text) return null;
+  const s = text.replace(/^```(?:json)?\s*/i, "").trim();
+  let verdict = "";
+  const vm = /"verdict"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(s);
+  if (vm) { try { verdict = JSON.parse(`"${vm[1]}"`); } catch { verdict = vm[1]; } }
+  const cards: any[] = [];
+  for (const m of s.matchAll(/\{[^{}]*\}/g)) {
+    try {
+      const o = JSON.parse(m[0]);
+      if (o && typeof o === "object" && !("verdict" in o)) cards.push(o);
+    } catch { /* incomplete tail — skip */ }
+  }
+  if (!verdict && !cards.length) return null;
+  // which array each card came from: diffs carry a category (or a reflect tag), variants don't
+  const isDiff = (o: any) => typeof o.category === "string" || typeof o.tag === "string";
+  const diffs = cards.filter(isDiff);
+  const variants = cards.filter((o) => !isDiff(o) && (o.mine || o.targetFrag));
+  return { verdict, diffs, variants, better: [], missed: [], errors: diffs };
 }
 
 function normalizeReflectResult(parsed: any, mode: string, fallbackText: string) {
@@ -479,7 +508,7 @@ Deno.serve(async (req) => {
       },
       body: JSON.stringify({
         model: MODEL,
-        max_tokens: MAX_TOKENS,
+        max_tokens: (isReverse || isSpeech || isReflect) ? MAX_TOKENS_JSON : MAX_TOKENS,
         system,
         messages,
       }),
@@ -502,21 +531,23 @@ Deno.serve(async (req) => {
 
   if (!text) return json({ error: "Empty response from Claude.", raw: out }, 502);
 
-  if (isSpeech) {
-    const parsed = parseReflectJSON(text); // same fence-stripping / first-{…} recovery
-    const result = normalizeSpeechResult(parsed, parsed ? "" : text);
-    return json({ speech: result, model: out?.model ?? MODEL, usage: out?.usage ?? null });
-  }
-  if (isReverse) {
-    const parsed = parseReflectJSON(text); // same fence-stripping / first-{…} recovery
-    const result = normalizeReverseResult(parsed, parsed ? "" : text);
-    return json({ reverse: result, model: out?.model ?? MODEL, usage: out?.usage ?? null });
-  }
-  if (isReflect) {
-    const parsed = parseReflectJSON(text);
-    const result = normalizeReflectResult(parsed, reflect, parsed ? "" : text);
-    return json({ reflect: result, model: out?.model ?? MODEL, usage: out?.usage ?? null });
-  }
+  // Structured modes. If the JSON didn't parse (almost always: cut off at
+  // max_tokens), salvage the complete cards rather than dumping raw text into
+  // the verdict — and tell the client, so it can offer 다시 분석 instead of
+  // reporting "no errors".
+  const truncated = out?.stop_reason === "max_tokens";
+  const structured = (normalize: (p: any, fb: string) => any) => {
+    const parsed = parseReflectJSON(text); // fence-stripping / first-{…} recovery
+    const salvaged = parsed ? null : salvageJSON(text);
+    const result = normalize(parsed ?? salvaged, "");
+    result.parseError = !parsed && !salvaged;
+    result.partial = truncated || !!salvaged;
+    return result;
+  };
+  const meta = { truncated, model: out?.model ?? MODEL, usage: out?.usage ?? null };
+  if (isSpeech) return json({ speech: structured(normalizeSpeechResult), ...meta });
+  if (isReverse) return json({ reverse: structured(normalizeReverseResult), ...meta });
+  if (isReflect) return json({ reflect: structured((p, fb) => normalizeReflectResult(p, reflect, fb)), ...meta });
   if (extract) {
     const { reply, picks } = splitPicks(text);
     return json({ text: reply, picks, model: out?.model ?? MODEL, usage: out?.usage ?? null });

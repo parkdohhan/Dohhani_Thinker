@@ -285,7 +285,13 @@
   }
   function normRevAnalysis(a) {
     if (!a || typeof a !== "object") return null;
+    // An analysis saved before the server learned to flag parse failures looks
+    // like this: raw JSON text in `verdict`, no cards at all. Treat it as one.
+    const rawDump = typeof a.verdict === "string" && /^\s*(```|\{)/.test(a.verdict)
+      && !(Array.isArray(a.diffs) && a.diffs.length) && !(Array.isArray(a.variants) && a.variants.length);
     return {
+      parseError: !!a.parseError || rawDump,
+      partial: !!a.partial,
       verdict: typeof a.verdict === "string" ? a.verdict : "",
       diffs: Array.isArray(a.diffs) ? a.diffs.map(normRevDiff) : [],
       // 세 축이 모두 통과한 갈림 — 오류가 아니라 수용 가능한 변형
@@ -344,6 +350,8 @@
   function normSpeechAnalysis(a) {
     if (!a || typeof a !== "object") return null;
     return {
+      parseError: !!a.parseError,
+      partial: !!a.partial,
       verdict: typeof a.verdict === "string" ? a.verdict : "",
       missed: Array.isArray(a.missed) ? a.missed.filter((x) => typeof x === "string").slice(0, 10) : [],
       diffs: Array.isArray(a.diffs) ? a.diffs.map(normRevDiff) : [],
@@ -1476,8 +1484,13 @@
   // 담기 picker + 필사 box). `null` → read-only fragment pairs for the prior-attempt list.
   function revAnalysisHtml(an, ctx) {
     if (!an) return "";
+    const retryBtn = ctx ? `<button type="button" class="rev-btn rev-btn--ghost" id="revRetryBtn">다시 분석</button>` : "";
+    if (an.parseError) {
+      return `<div class="rev-analyzing is-failed">분석 응답을 읽지 못했습니다 — 응답이 잘렸거나 형식이 깨졌습니다.${retryBtn}</div>`;
+    }
     let html = "", unfiled = 0;
     if (an.verdict) html += `<div class="rev-verdict">${esc(an.verdict)}</div>`;
+    if (an.partial) html += `<div class="rev-analyzing is-failed">응답이 잘려 일부만 복구됐습니다 — 다시 분석하면 전체를 받습니다.${retryBtn}</div>`;
     if (an.diffs.length) {
       html += `<div class="rev-diff-list">` + an.diffs.map((d, i) => {
         const filed = ctx ? findPattern(patKey(d.mine, d.targetFrag)) : null;
@@ -1557,7 +1570,7 @@
     // improvement is only meaningful between two analyzed attempts
     let delta = "";
     const prev = idx > 0 ? rv.attempts[idx - 1] : null;
-    if (prev && prev.analysis && at.analysis) {
+    if (prev && prev.analysis && at.analysis && !prev.analysis.parseError && !at.analysis.parseError) {
       const diffNow = at.analysis.diffs.length, diffPrev = prev.analysis.diffs.length;
       delta = diffNow < diffPrev ? `이전보다 오류 ${diffPrev - diffNow}개 줄었습니다`
         : diffNow > diffPrev ? `이전보다 오류 ${diffNow - diffPrev}개 늘었습니다`
@@ -1566,7 +1579,7 @@
     // 상단 지표는 카드 판정(오류 유형별 카운트)이다. 단어 diff는 구조 선택 차이까지
     // 전부 세는 노이즈라서 지표로 쓰지 않는다 — 아래에서 시각 보조로만 남는다.
     let scoreline = "";
-    if (at.analysis) {
+    if (at.analysis && !at.analysis.parseError) {
       const an = at.analysis;
       const catCounts = {}; REV_CATEGORIES.forEach((c) => (catCounts[c] = 0));
       const axCounts = { meaning: 0, grammar: 0, register: 0 };
@@ -3046,8 +3059,10 @@
     const m = Math.floor(sp.durationSec / 60), s = sp.durationSec % 60;
     const dur = sp.durationSec ? `${m ? m + "분 " : ""}${s}초` : "";
     let body = "";
-    if (an) {
+    if (an && !an.parseError) {
       if (an.verdict) body += `<div class="nb-verdict">${esc(an.verdict)}</div>`;
+      if (an.partial) body += `<div class="nb-sp-busy">응답이 잘려 일부만 복구됐습니다.
+        <button type="button" class="pattern-open" data-speech-retry="${escAttr(e.id)}">다시 분석</button></div>`;
       if (an.missed.length) body += `<div class="nb-missed">
         <div class="nb-missed-h">요점에서 빠지거나 어긋난 것</div>
         <ul>${an.missed.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>
@@ -3072,8 +3087,8 @@
     } else if (busy) {
       body += `<div class="nb-sp-busy">△ Claude 분석 중…</div>`;
     } else {
-      body += `<div class="nb-sp-busy">분석이 없습니다.
-        <button type="button" class="pattern-open" data-speech-retry="${escAttr(e.id)}">분석 요청</button></div>`;
+      body += `<div class="nb-sp-busy">${an ? "분석 응답을 읽지 못했습니다 — 잘렸거나 형식이 깨졌습니다." : "분석이 없습니다."}
+        <button type="button" class="pattern-open" data-speech-retry="${escAttr(e.id)}">${an ? "다시 분석" : "분석 요청"}</button></div>`;
     }
     return `<section class="nb-doc nb-speech" data-speech="${escAttr(e.id)}">
       <div class="nb-doc-head">
