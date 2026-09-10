@@ -265,6 +265,42 @@ function normalizeReverseResult(parsed: any, fallbackText: string) {
   return out;
 }
 
+// === 분할 (segment) mode ===
+// The reader pasted a whole Korean paragraph + its English translation into a
+// 역번역 setup. Split both into ALIGNED chunks of 2-3 Korean sentences each, so
+// one drill unit stays small. Used only when the two sides' sentence counts
+// differ (the frontend aligns 1:1 locally when they match). JSON only.
+const SEGMENT_PROMPT = `You are segmenting a bilingual drill text. You get a Korean paragraph and its English translation. Split BOTH into the same number of aligned chunks.
+
+Rules:
+- Each chunk holds 2-3 Korean sentences and exactly the English that translates them (the English side may hold more or fewer sentences where the translation merges or splits; keep such units together in one chunk). Only the final chunk may hold a single Korean sentence, and only if unavoidable.
+- Copy text VERBATIM: every character of both input texts must appear exactly once, in the original order, across the chunks. No paraphrase, no omission, no reordering, no added or normalized words.
+- Cut only at sentence boundaries.
+- Chunk i's "ko" and chunk i's "en" must translate each other.
+
+Return STRICT JSON only — no markdown fences, no prose before or after:
+
+{"pairs": [{"ko": "<Korean chunk>", "en": "<English chunk>"}]}`;
+
+function buildSegmentUserMessage(koSource: string, target: string): string {
+  return `[Korean paragraph]\n${koSource.trim()}\n\n[English translation]\n${target.trim()}`;
+}
+
+function normalizeSegmentResult(parsed: any) {
+  const out: any = { pairs: [] };
+  if (parsed && typeof parsed === "object" && Array.isArray(parsed.pairs)) {
+    out.pairs = parsed.pairs
+      .filter((x: any) => x && typeof x === "object")
+      .map((x: any) => ({
+        ko: typeof x.ko === "string" ? x.ko.slice(0, 4000) : "",
+        en: typeof x.en === "string" ? x.en.slice(0, 4000) : "",
+      }))
+      .filter((x: any) => x.ko.trim() && x.en.trim())
+      .slice(0, 40);
+  }
+  return out;
+}
+
 // === 발표 (speech practice) mode ===
 // The reader spoke freely (no script) about a project's material; the browser
 // transcribed it and they hand-corrected the transcript. We judge coverage
@@ -436,16 +472,25 @@ Deno.serve(async (req) => {
     return json({ error: "Request body must be JSON." }, 400);
   }
 
-  const isReverse = payload?.reverse === true;
-  const isSpeech = !isReverse && payload?.speech === true;
+  const isSegment = payload?.segment === true;
+  const isReverse = !isSegment && payload?.reverse === true;
+  const isSpeech = !isSegment && !isReverse && payload?.speech === true;
   const reflect = typeof payload?.reflect === "string" ? payload.reflect : "";
-  const isReflect = !isReverse && !isSpeech && (reflect === "correct" || reflect === "expand" || reflect === "deep");
-  const extract = !isReverse && !isSpeech && !isReflect && payload?.extract === true;
+  const isReflect = !isSegment && !isReverse && !isSpeech && (reflect === "correct" || reflect === "expand" || reflect === "deep");
+  const extract = !isSegment && !isReverse && !isSpeech && !isReflect && payload?.extract === true;
 
   let messages: Array<{ role: string; content: string }>;
   let system: string;
 
-  if (isSpeech) {
+  if (isSegment) {
+    // 분할: the frontend sends the pasted paragraph pair, not a conversation.
+    const koSource = typeof payload?.koSource === "string" ? payload.koSource : "";
+    const target = typeof payload?.target === "string" ? payload.target : "";
+    if (!koSource.trim()) return json({ error: "`koSource` (the Korean paragraph) is required." }, 400);
+    if (!target.trim()) return json({ error: "`target` (the English translation) is required." }, 400);
+    system = SEGMENT_PROMPT;
+    messages = [{ role: "user", content: buildSegmentUserMessage(koSource, target) }];
+  } else if (isSpeech) {
     // 발표: the frontend sends the transcript + the project's material, not a conversation.
     const transcript = typeof payload?.transcript === "string" ? payload.transcript : "";
     if (!transcript.trim()) return json({ error: "`transcript` (the spoken text) is required." }, 400);
@@ -508,7 +553,8 @@ Deno.serve(async (req) => {
       },
       body: JSON.stringify({
         model: MODEL,
-        max_tokens: (isReverse || isSpeech || isReflect) ? MAX_TOKENS_JSON : MAX_TOKENS,
+        // 분할 모드는 두 원문을 통째로 다시 받아써야 하므로 상한을 가장 넉넉히 잡는다
+        max_tokens: isSegment ? 6000 : (isReverse || isSpeech || isReflect) ? MAX_TOKENS_JSON : MAX_TOKENS,
         system,
         messages,
       }),
@@ -531,6 +577,14 @@ Deno.serve(async (req) => {
 
   if (!text) return json({ error: "Empty response from Claude.", raw: out }, 502);
 
+  // 분할: 클라이언트가 조각을 이어 붙여 원문과 대조 검증하므로, 잘리거나 깨진
+  // 응답을 살릴 이유가 없다 — 파싱 실패는 빈 pairs로 돌아가 통짜 저장으로 폴백된다.
+  if (isSegment) {
+    const parsed = parseReflectJSON(text); // same fence-stripping / first-{…} recovery
+    const result = normalizeSegmentResult(parsed);
+    result.partial = out?.stop_reason === "max_tokens";
+    return json({ segment: result, model: out?.model ?? MODEL, usage: out?.usage ?? null });
+  }
   // Structured modes. If the JSON didn't parse (almost always: cut off at
   // max_tokens), salvage the complete cards rather than dumping raw text into
   // the verdict — and tell the client, so it can offer 다시 분석 instead of

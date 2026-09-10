@@ -813,7 +813,7 @@
       "claudePanel","claudeHead","claudeTitle","claudeChevron","claudeBody","threadList","claudeCompose","claudeInput","claudeSend","claudeWarn","addParagraphBtn","passagesBefore","passagesAfter",
       "reverseView","revDate","revWeekday","revStageBadge","revDeleteBtn","revAuthor","revTitle","revPage",
       "entryCorpusSeg","revCorpusSeg","projectsCorpusFilter",
-      "revSetup","revSetupKo","revSetupTarget","revSetupSave","revSetupCancel",
+      "revSetup","revSetupKo","revSetupTarget","revSetupSave","revSetupCancel","revSetupSplit","revSetupSplitWrap",
       "revWrite","revKo","revAttemptH","revAttemptInput","revSubmit","revWriteMeta","revEditSetup","revPrior","revCompare",
       "revPassBefore","revPassAfter","revAddPassage","revHlToolbar",
       "patternsBtn","patternsCount","patternsView","patternsSub","patternsFilter","patternsStarFilter","patternsCats","patternList",
@@ -1309,6 +1309,11 @@
       D.revSetupTarget.value = rv.target;   // the one moment the target is allowed on screen
       autoGrow(D.revSetupKo, 600); autoGrow(D.revSetupTarget, 600);
       D.revSetupCancel.hidden = !(rv.koSource.trim() && rv.target.trim());
+      // 시도 기록이 있는 문단은 나누지 않는다 — 기록이 원문과 어긋나 버리므로
+      D.revSetupSplit.disabled = !!rv.attempts.length;
+      D.revSetupSplitWrap.title = rv.attempts.length
+        ? "이미 시도 기록이 있는 문단은 나눌 수 없습니다"
+        : "4문장 이상이면 두세 문장짜리 문단들로 나눠 저장합니다";
     } else {
       // leave nothing behind: the target must not be readable from the DOM in state A
       D.revSetupKo.value = ""; D.revSetupTarget.value = "";
@@ -1669,17 +1674,119 @@
     }).join("");
   }
 
-  function saveReverseSetup() {
+  /* ── 통문단 자동 분할: 긴 글을 두세 문장짜리 문단들로 나눈다 ──
+     한 번에 옮기기엔 긴 문단은 드릴 단위로 너무 크다. 한·영 문장 수가 같으면
+     로컬에서 1:1로 묶고, 다르면(번역이 문장을 합치거나 쪼갠 경우) Claude가
+     정렬해서 나눈다. 나눈 결과는 항상 원문 검증을 통과해야 한다. */
+  // 문장 경계 스팬 — 종결부호(.!?…) + 닫는 따옴표/괄호 뒤 공백. 다음 글자가
+  // 소문자면(약어 e.g., vs.) 경계로 보지 않는다. 스팬으로 잘라야 원문의 줄바꿈이 산다.
+  function sentenceSpans(text) {
+    const t = String(text || "");
+    const spans = [];
+    let start = 0;
+    const re = /[.!?…]+["'”’)\]」』»]*\s+/g;
+    let m;
+    while ((m = re.exec(t))) {
+      const next = t[re.lastIndex] || "";
+      if (/[a-z]/.test(next)) continue;
+      spans.push({ start, end: re.lastIndex });
+      start = re.lastIndex;
+    }
+    if (t.slice(start).trim()) spans.push({ start, end: t.length });
+    return spans;
+  }
+  // n문장을 2~3문장씩 담는 덩어리 크기들로 — 3+3+2 처럼, 1짜리 꼬리가 안 생기게
+  function revChunkSizes(n) {
+    const k = Math.ceil(n / 3);
+    const base = Math.floor(n / k), extra = n % k;
+    const sizes = [];
+    for (let c = 0; c < k; c++) sizes.push(base + (c < extra ? 1 : 0));
+    return sizes;
+  }
+  function sliceByChunks(text, spans, sizes) {
+    const out = []; let i = 0;
+    for (const size of sizes) {
+      out.push(text.slice(spans[i].start, spans[i + size - 1].end).trim());
+      i += size;
+    }
+    return out;
+  }
+  // 한·영 문장 수가 같을 때만 — 인덱스 1:1 대응으로 로컬 분할
+  function localAlignedPairs(ko, en) {
+    const ks = sentenceSpans(ko), es = sentenceSpans(en);
+    if (ks.length <= 3 || ks.length !== es.length) return null;
+    const sizes = revChunkSizes(ks.length);
+    const kc = sliceByChunks(ko, ks, sizes), ec = sliceByChunks(en, es, sizes);
+    return kc.map((k, i) => ({ ko: k, en: ec[i] }));
+  }
+  // 문장 수가 어긋나면 Claude에게 정렬 분할을 맡긴다. 반환된 조각을 이어 붙였을 때
+  // 원문과(공백·따옴표 무시) 정확히 같아야만 믿는다 — 누락·의역이면 null.
+  async function segmentViaClaude(ko, en) {
+    const { data: sess } = await sb.auth.getSession();
+    const tok = sess && sess.session ? sess.session.access_token : null;
+    if (!tok) throw new Error("로그인이 필요합니다");
+    const resp = await fetch(CLAUDE_FN, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", apikey: SUPABASE_KEY, Authorization: `Bearer ${tok}` },
+      body: JSON.stringify({ segment: true, koSource: ko, target: en }),
+    });
+    const out = await resp.json().catch(() => ({}));
+    if (!resp.ok || out.error) throw new Error((out && out.error) ? out.error : `요청 실패 (${resp.status})`);
+    const pairs = (out.segment && Array.isArray(out.segment.pairs) ? out.segment.pairs : [])
+      .filter((p) => p && typeof p.ko === "string" && typeof p.en === "string" && p.ko.trim() && p.en.trim())
+      .map((p) => ({ ko: p.ko.trim(), en: p.en.trim() }));
+    const flat = (s) => String(s || "").replace(/[\s"“”'‘’]/g, "");
+    if (pairs.length < 2) return null;
+    if (flat(pairs.map((p) => p.ko).join("")) !== flat(ko)) return null;
+    if (flat(pairs.map((p) => p.en).join("")) !== flat(en)) return null;
+    return pairs;
+  }
+
+  async function saveReverseSetup() {
+    if (revBusy) return;
     const e = currentEntry(); if (!e || e.kind !== "reverse") return;
     const rv = reverseOf(e);
     const ko = D.revSetupKo.value.trim(), tg = D.revSetupTarget.value.trim();
     if (!ko) { D.revSetupKo.focus(); toast("한국어 원문을 붙여넣어 주세요"); return; }
     if (!tg) { D.revSetupTarget.focus(); toast("목표 영문을 붙여넣어 주세요"); return; }
-    rv.koSource = ko; rv.target = tg;
-    touchEntry(e);
-    revMode = "write";
-    renderReverseEntry();
-    renderRecentList();
+
+    // 자동 분할 — 시도 기록이 있는 문단은 건드리지 않는다 (기록이 원문과 어긋나 버리므로)
+    let pairs = null;
+    const wantSplit = D.revSetupSplit && D.revSetupSplit.checked && !rv.attempts.length;
+    if (wantSplit) {
+      pairs = localAlignedPairs(ko, tg);
+      if (!pairs && sentenceSpans(ko).length > 3) {
+        revBusy = true; aiBusy++;
+        const btnLabel = D.revSetupSave.textContent;
+        D.revSetupSave.disabled = true; D.revSetupSave.textContent = "문단 나누는 중…";
+        try { pairs = await segmentViaClaude(ko, tg); }
+        catch (err) { pairs = null; toast("나누기 실패 — " + (err.message || String(err))); }
+        finally {
+          revBusy = false; aiBusy = Math.max(0, aiBusy - 1);
+          D.revSetupSave.disabled = false; D.revSetupSave.textContent = btnLabel;
+        }
+        // 저장 대기 중 문서를 벗어났으면 그대로 끝 — 남의 문단에 쓰면 안 된다
+        if (currentEntry() !== e) return;
+        if (!pairs) toast("문장 정렬이 확실하지 않아 통째로 저장합니다");
+      }
+    }
+
+    if (pairs && pairs.length > 1) {
+      rv.koSource = pairs[0].ko; rv.target = pairs[0].en;
+      const ps = revPassages(e);
+      const idx = Math.max(0, ps.findIndex((p) => p.id === rv.id));
+      ps.splice(idx + 1, 0, ...pairs.slice(1).map((pr) => normRevPassage({ koSource: pr.ko, target: pr.en })));
+      touchEntry(e);
+      revMode = "write";
+      renderReverseEntry(); renderRecentList(); renderSidebarCounts();
+      toast(`${pairs.length}개 문단으로 나눴습니다 — 두세 문장씩`);
+    } else {
+      rv.koSource = ko; rv.target = tg;
+      touchEntry(e);
+      revMode = "write";
+      renderReverseEntry();
+      renderRecentList();
+    }
     setTimeout(() => { try { D.revAttemptInput.focus(); } catch (_) {} }, 0);
   }
 

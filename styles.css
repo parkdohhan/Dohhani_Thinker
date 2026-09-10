@@ -1298,3 +1298,13 @@ a { color: inherit; }
 .corpus-chip.corpus-literary { background: var(--color-background-secondary); color: var(--color-text-secondary); border: 0.5px solid var(--color-border-tertiary); }
 .corpus-chip.corpus-mixed { background: var(--color-background-secondary); color: var(--color-text-tertiary); border: 0.5px solid var(--color-border-tertiary); }
 .recent-item--patrev .recent-item-src { color: var(--color-text-warning); }
+
+/* 역번역 setup — 통문단 자동 분할 토글 */
+.rev-split-toggle {
+  display: flex; align-items: center; gap: 7px; margin-top: 10px;
+  font-family: var(--font-korean); font-size: 12px; color: var(--color-text-secondary);
+  cursor: pointer; user-select: none; width: fit-content;
+}
+.rev-split-toggle input { accent-color: var(--color-text-primary); margin: 0; }
+.rev-split-toggle input:disabled { cursor: not-allowed; }
+.rev-split-toggle input:disabled + span { opacity: 0.45; }
