@@ -1679,7 +1679,9 @@
      로컬에서 1:1로 묶고, 다르면(번역이 문장을 합치거나 쪼갠 경우) Claude가
      정렬해서 나눈다. 나눈 결과는 항상 원문 검증을 통과해야 한다. */
   // 문장 경계 스팬 — 종결부호(.!?…) + 닫는 따옴표/괄호 뒤 공백. 다음 글자가
-  // 소문자면(약어 e.g., vs.) 경계로 보지 않는다. 스팬으로 잘라야 원문의 줄바꿈이 산다.
+  // 소문자면 대개 약어(e.g., vs.) 뒤의 이어짐이라 경계가 아니지만, 종결부호 앞이
+  // 한글이면 문장이 실제로 끝난 것이다 — 분석체는 소문자 용어로 문장을 시작한다
+  // ("…소멸이다. beat 기반…"). 스팬으로 잘라야 원문의 줄바꿈이 산다.
   function sentenceSpans(text) {
     const t = String(text || "");
     const spans = [];
@@ -1688,7 +1690,8 @@
     let m;
     while ((m = re.exec(t))) {
       const next = t[re.lastIndex] || "";
-      if (/[a-z]/.test(next)) continue;
+      const prev = t[m.index - 1] || "";
+      if (/[a-z]/.test(next) && !/[가-힣]/.test(prev)) continue;
       spans.push({ start, end: re.lastIndex });
       start = re.lastIndex;
     }
