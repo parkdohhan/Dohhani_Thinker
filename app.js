@@ -124,7 +124,7 @@
   const deletedEntries = new Set();
   let dirtyAppState = false;
 
-  function newVault() { return { entries: [], terms: [], patterns: [], settings: { artAesthetic: "cha", curatorNote: "", unpublishedIds: [], kitsTaken: [], tourSeenAt: "" } }; }
+  function newVault() { return { entries: [], terms: [], patterns: [], questions: [], settings: { artAesthetic: "cha", curatorNote: "", unpublishedIds: [], kitsTaken: [], tourSeenAt: "" } }; }
 
   /* 역번역 (reverse translation) — the four categories a diff can fall into */
   const REV_CATEGORIES = ["lexis-register", "connectives", "structure", "articles-prepositions"];
@@ -567,6 +567,26 @@
     if (!msgs.length) return [];
     return [normThread({ messages: msgs })];
   }
+  /* ── 질문 노트 (바로 묻기) normalization ── */
+  const ASK_CATS = ["grammar", "vocab", "usage", "expression", "other"];
+  const ASK_CAT_LABEL = { grammar: "문법", vocab: "어휘", usage: "쓰임", expression: "표현", other: "기타" };
+  function normQuestion(q) {
+    q = q && typeof q === "object" ? q : {};
+    const str = (x) => (typeof x === "string" ? x : "");
+    const c = q.context && typeof q.context === "object" ? q.context : {};
+    return {
+      id: typeof q.id === "string" && q.id ? q.id : uid(),
+      createdAt: typeof q.createdAt === "string" && q.createdAt ? q.createdAt : nowISO(),
+      q: str(q.q), a: str(q.a),
+      // Claude가 단 오답노트 머리 — 제목 · 분류 · 핵심 · 틀린/맞는 형태 · 예문
+      title: str(q.title), category: ASK_CATS.includes(q.category) ? q.category : "other",
+      point: str(q.point), wrong: str(q.wrong), right: str(q.right),
+      examples: Array.isArray(q.examples) ? q.examples.filter((x) => typeof x === "string" && x.trim()) : [],
+      // 물을 때 보고 있던 곳
+      context: { entryId: str(c.entryId), label: str(c.label), selection: str(c.selection) },
+      starred: !!q.starred,
+    };
+  }
   function normVault(v) {
     v = v && typeof v === "object" ? v : {};
     return {
@@ -580,6 +600,7 @@
         })) : [],
       })) : [],
       patterns: Array.isArray(v.patterns) ? v.patterns.filter((x) => x && typeof x === "object").map(normPattern) : [],
+      questions: Array.isArray(v.questions) ? v.questions.filter((x) => x && typeof x === "object").map(normQuestion) : [],
       settings: {
         artAesthetic: (v.settings && v.settings.artAesthetic) || "cha",
         curatorNote: (v.settings && v.settings.curatorNote) || "",
@@ -808,6 +829,7 @@
       if (!ar.error && ar.data) {
         const rTerms = Array.isArray(ar.data.terms) ? ar.data.terms : [];
         const rPatterns = Array.isArray(ar.data.patterns) ? ar.data.patterns : [];
+        const rQuestions = Array.isArray(ar.data.questions) ? ar.data.questions : [];
         const rSettings = ar.data.settings || {};
         const remoteNewer = !state.__appUpdatedAt || String(ar.data.updated_at) >= String(state.__appUpdatedAt);
         if (remoteNewer) {
@@ -816,6 +838,9 @@
           // `patterns` arrived with 역번역 — an older row simply has none yet, so an
           // empty remote list must not wipe locally-collected ones.
           if (rPatterns.length || !state.patterns || !state.patterns.length) state.patterns = normVault({ patterns: rPatterns }).patterns;
+          else dirtyAppState = true;
+          // same rule for 질문 노트 — a row from before migration 0003 has none
+          if (rQuestions.length || !state.questions || !state.questions.length) state.questions = normVault({ questions: rQuestions }).questions;
           else dirtyAppState = true;
         }
         else dirtyAppState = true;
@@ -857,15 +882,16 @@
         if (!error) dirtyEntries.delete(id);
       }
       if (dirtyAppState) {
-        let { data, error } = await sb.from("app_state").upsert(
-          { user_id: user.id, terms: state.terms, patterns: state.patterns, settings: state.settings, updated_at: nowISO() }, { onConflict: "user_id" }
-        ).select().maybeSingle();
-        // a project whose `patterns` column isn't migrated yet must not lose terms/settings sync
-        if (error && /patterns/i.test(String(error.message || ""))) {
-          console.warn("[pilsa] app_state.patterns column missing — run migration 0002");
-          ({ data, error } = await sb.from("app_state").upsert(
-            { user_id: user.id, terms: state.terms, settings: state.settings, updated_at: nowISO() }, { onConflict: "user_id" }
-          ).select().maybeSingle());
+        const row = { user_id: user.id, terms: state.terms, patterns: state.patterns, questions: state.questions, settings: state.settings, updated_at: nowISO() };
+        const put = () => sb.from("app_state").upsert(row, { onConflict: "user_id" }).select().maybeSingle();
+        let { data, error } = await put();
+        // a project whose newer columns aren't migrated yet must not lose terms/settings sync
+        for (const [col, mig] of [["questions", "0003"], ["patterns", "0002"]]) {
+          if (error && new RegExp(col, "i").test(String(error.message || ""))) {
+            console.warn(`[pilsa] app_state.${col} column missing — run migration ${mig}`);
+            delete row[col];
+            ({ data, error } = await put());
+          }
         }
         if (!error) { dirtyAppState = false; if (data) state.__appUpdatedAt = data.updated_at; }
       }
@@ -895,7 +921,7 @@
       const headers = { "Content-Type": "application/json", apikey: SUPABASE_KEY, Authorization: `Bearer ${tok}`, Prefer: "resolution=merge-duplicates" };
       const rows = [...dirtyEntries].map(findEntry).filter(Boolean).map(entryToRow);
       if (rows.length) fetch(`${SUPABASE_URL}/rest/v1/entries?on_conflict=id`, { method: "POST", headers, body: JSON.stringify(rows), keepalive: true });
-      if (dirtyAppState) fetch(`${SUPABASE_URL}/rest/v1/app_state?on_conflict=user_id`, { method: "POST", headers, body: JSON.stringify([{ user_id: user.id, terms: state.terms, patterns: state.patterns, settings: state.settings, updated_at: nowISO() }]), keepalive: true });
+      if (dirtyAppState) fetch(`${SUPABASE_URL}/rest/v1/app_state?on_conflict=user_id`, { method: "POST", headers, body: JSON.stringify([{ user_id: user.id, terms: state.terms, patterns: state.patterns, questions: state.questions, settings: state.settings, updated_at: nowISO() }]), keepalive: true });
     } catch (_) {}
   }
   // re-pull from the cloud when the tab regains focus, so a second device
@@ -936,6 +962,8 @@
       "revWrite","revKo","revAttemptH","revAttemptInput","revSubmit","revWriteMeta","revEditSetup","revPrior","revCompare",
       "revPassBefore","revPassAfter","revAddPassage","revHlToolbar",
       "patternsBtn","patternsCount","patternsView","patternsSub","patternsFilter","patternsStarFilter","patternsCats","patternList",
+      "questionsBtn","questionsCount","questionsView","questionsSub","questionsFilter","questionsStarFilter","questionsCats","questionList",
+      "askDock","askCtx","askNew","askMin","askLog","askSel","askForm","askInput","askSend","askFab",
       "libraryBtn","libraryCount","libraryView","librarySub","kitGrid",
       "wordsView","wordsSub","wordsFilter","wordsSort","wordsGrid","sentencesView","sentencesSub","sentencesFilter","sentenceList",
       "projectsBtn","projectsCount","projectsView","projectsSort","projectsFilter","projectsGrid","projectsKindFilter","projectsNewBtn",
@@ -988,11 +1016,12 @@
   function renderRoute() {
     if (!user) return;
     const { name } = parseHash();
-    [D.emptyState, D.entryView, D.reverseView, D.wordsView, D.sentencesView, D.patternsView, D.libraryView, D.projectsView, D.projectDetailView].forEach((v) => (v.hidden = true));
+    [D.emptyState, D.entryView, D.reverseView, D.wordsView, D.sentencesView, D.patternsView, D.questionsView, D.libraryView, D.projectsView, D.projectDetailView].forEach((v) => (v.hidden = true));
     D.searchScrim.hidden = true;
-    [D.searchBtn, D.wordsBtn, D.sentencesBtn, D.patternsBtn, D.libraryBtn, D.projectsBtn].forEach((b) => b.classList.remove("is-on"));
+    [D.searchBtn, D.wordsBtn, D.sentencesBtn, D.patternsBtn, D.questionsBtn, D.libraryBtn, D.projectsBtn].forEach((b) => b.classList.remove("is-on"));
     if (name === "library") { D.libraryBtn.classList.add("is-on"); D.libraryView.hidden = false; renderLibraryView(); }
     else if (name === "patterns") { D.patternsBtn.classList.add("is-on"); D.patternsView.hidden = false; renderPatternsView(); }
+    else if (name === "questions") { D.questionsBtn.classList.add("is-on"); D.questionsView.hidden = false; renderQuestionsView(); }
     else if (name === "words") { D.wordsBtn.classList.add("is-on"); D.wordsView.hidden = false; renderWordsView(); }
     else if (name === "sentences") { D.sentencesBtn.classList.add("is-on"); D.sentencesView.hidden = false; renderSentencesView(); }
     else if (name === "projects" || name === "art") {
@@ -1004,6 +1033,7 @@
     }
     else { showDaily(); }
     if (name !== "daily" && name !== "") D.main.scrollTop = 0;
+    paintAskCtx();
   }
   function showDaily() {
     D.main.scrollTop = 0;
@@ -2904,6 +2934,7 @@
     const pc = Array.isArray(state.patterns) ? state.patterns.length : 0;
     D.sentencesCount.textContent = sc ? String(sc) : "";
     D.patternsCount.textContent = pc ? String(pc) : "";
+    D.questionsCount.textContent = state.questions.length ? String(state.questions.length) : "";
     { const kn = (Array.isArray(window.PILSA_KITS) ? window.PILSA_KITS : []).length;
       D.libraryCount.textContent = kn ? String(kn) : ""; }
     D.projectsCount.textContent = projectKeys.size ? String(projectKeys.size) : "";
@@ -3715,6 +3746,300 @@
     }).join("");
   }
 
+  /* ─────────────────────── 바로 묻기 · 질문 노트 ─────────────────────── */
+  // 어느 화면에서든 오른쪽에 붙어 있는 튜터. 넓은 화면에선 본문이 비켜 앉고(스크롤해도
+  // 튜터는 제자리), 좁은 화면에선 오른쪽 아래 버튼으로 접힌다. 물은 것은 전부 「질문 노트」에
+  // 오답노트 카드로 정리된다 — 답과 함께 Claude가 제목·핵심·틀린/맞는 형태를 달아 준다.
+  const ASK_WIDE = 1180;               // 이 폭 이상이면 본문 옆 붙박이, 아래면 떠 있는 패널
+  const askUI = { open: false, turns: [], busy: false, sel: "", selKey: "" };
+  const askPrefKey = () => (user ? `pilsa:ask:${user.id}` : null);
+  const askWide = () => window.innerWidth >= ASK_WIDE;
+  const askCtxKey = () => parseHash().name + ":" + (currentId || "");
+  const findQuestion = (id) => state.questions.find((q) => q.id === id) || null;
+  const localDay = (iso) => {
+    const d = new Date(iso); if (isNaN(d)) return String(iso).slice(0, 10);
+    const z = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())}`;
+  };
+  const localHM = (iso) => { const d = new Date(iso); return isNaN(d) ? "" : `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`; };
+
+  // 지금 무엇을 보고 있는지 — 모델에 보낼 것(forModel)과 노트에 남길 것
+  function askContext() {
+    const { name } = parseHash();
+    const PAGE = { patterns: "나의 패턴", questions: "질문 노트", words: "나의 단어", sentences: "나의 문장", library: "서가", projects: "프로젝트" };
+    const page = PAGE[name] || "";
+    const out = { forModel: { page, selection: askUI.sel }, entryId: "", label: page, selection: askUI.sel };
+    const e = (name === "daily" || !name) ? currentEntry() : null;
+    if (e && isShown(e)) {
+      const src = e.source || {};
+      Object.assign(out.forModel, { author: src.author || "", title: src.title || "", pageNo: src.page || "" });
+      out.entryId = e.id;
+      if (e.kind === "reverse") {
+        const p = reverseOf(e);
+        out.forModel.page = "역번역";
+        out.forModel.ko = p.koSource;
+        // 목표는 대조 화면에서만 이미 펼쳐져 있다 — 쓰는 중에는 모델에게도 보내지 않는다
+        if (revMode === "compare") out.forModel.body = p.target;
+        else { out.forModel.drill = true; out.forModel.draft = D.revAttemptInput.value; }
+      } else {
+        out.forModel.page = "필사";
+        out.forModel.body = e.body;
+        out.forModel.interpretation = e.interpretation;
+      }
+      out.label = out.forModel.page + (srcLabel(e) ? " · " + srcLabel(e) : "");
+    }
+    return out;
+  }
+  function paintAskCtx() {
+    if (!D.askCtx || !user) return;
+    // 드래그해 둔 부분은 그 화면에서만 유효하다 — 다른 문서·페이지로 옮기면 비운다
+    if (askUI.sel && askUI.selKey !== askCtxKey()) { askUI.sel = ""; paintAskSel(); }
+    const c = askContext();
+    D.askCtx.textContent = c.label;
+    D.askCtx.title = c.label ? `Claude가 함께 보는 화면: ${c.label}` : "";
+  }
+  function paintAskSel() {
+    const s = askUI.sel;
+    D.askSel.hidden = !s;
+    D.askSel.innerHTML = s
+      ? `<span class="ask-sel-lbl">선택</span><span class="ask-sel-text">“${esc(s.length > 160 ? s.slice(0, 160) + "…" : s)}”</span>` +
+        `<button type="button" class="ask-sel-x" data-ask-selx title="선택 빼기" aria-label="선택 빼기">×</button>`
+      : "";
+  }
+  function askTurnHtml(t) {
+    if (t.role === "user") return `<div class="msg role-user"><span class="msg-who">나</span><div class="msg-content">${esc(t.content)}</div></div>`;
+    if (t.pending) return `<div class="msg role-assistant pending"><span class="msg-who">Claude</span><div class="msg-content">…생각 중</div></div>`;
+    const qn = t.noteId ? findQuestion(t.noteId) : null;
+    return `<div class="msg role-assistant"><span class="msg-who">Claude</span><div class="msg-content">${mdInline(t.content)}</div>` +
+      (qn ? `<button type="button" class="ask-filed" data-ask-note="${escAttr(qn.id)}">질문 노트에 정리됨 · ${esc(qn.title || "제목 없음")} →</button>` : "") +
+      `</div>`;
+  }
+  function renderAskLog() {
+    if (!D.askLog) return;
+    if (!askUI.turns.length) {
+      const recent = state.questions.slice().sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt))).slice(0, 3);
+      D.askLog.innerHTML = `<div class="ask-empty">
+        <p>지금 보고 있는 글을 함께 봅니다. 본문을 드래그해 두고 물으면 그 부분에 대해 답합니다.</p>
+        <p>문법 · 단어 뜻 · “이렇게 써도 되나” — 무엇이든. 물은 것은 <b>질문 노트</b>에 오답노트로 정리됩니다.</p>
+        ${recent.length ? `<div class="ask-recent-h">최근 질문</div>` + recent.map((q) =>
+          `<button type="button" class="ask-recent" data-ask-note="${escAttr(q.id)}">${esc(q.title || q.q)}</button>`).join("") : ""}
+      </div>`;
+      return;
+    }
+    D.askLog.innerHTML = askUI.turns.map(askTurnHtml).join("");
+    D.askLog.scrollTop = D.askLog.scrollHeight;
+  }
+  function renderAskDock() {
+    if (!D.askDock) return;
+    D.app.classList.toggle("ask-open", askUI.open);
+    D.app.classList.toggle("ask-docked", askUI.open && askWide());
+    D.askDock.hidden = !askUI.open;
+    D.askFab.hidden = askUI.open;
+    D.askSend.disabled = askUI.busy;
+    paintAskCtx(); paintAskSel(); renderAskLog();
+  }
+  function setAskOpen(open, focus) {
+    askUI.open = !!open;
+    // 넓은 화면에서의 선택만 기억한다 — 좁은 화면에서 연 패널은 본문을 덮으니 다음엔 접힌 채로
+    if (askWide()) { try { const k = askPrefKey(); if (k) localStorage.setItem(k, askUI.open ? "open" : "closed"); } catch (_) {} }
+    renderAskDock();
+    if (askUI.open && focus) setTimeout(() => { try { D.askInput.focus(); } catch (_) {} }, 0);
+  }
+  function applyAskDock() { if (D.askDock) D.app.classList.toggle("ask-docked", askUI.open && askWide()); }
+  function initAsk() {
+    askUI.turns = []; askUI.busy = false; askUI.sel = ""; askUI.selKey = "";
+    let pref = null;
+    try { const k = askPrefKey(); pref = k ? localStorage.getItem(k) : null; } catch (_) {}
+    askUI.open = askWide() && pref !== "closed";
+    renderAskDock();
+  }
+  function fileQuestion(q, a, note, ctx) {
+    const n = note && typeof note === "object" ? note : {};
+    const qn = normQuestion({
+      q, a, title: n.title || q.replace(/\s+/g, " ").trim().slice(0, 40),
+      category: n.category, point: n.point, wrong: n.wrong, right: n.right, examples: n.examples,
+      context: { entryId: ctx.entryId, label: ctx.label, selection: ctx.selection },
+      createdAt: nowISO(),
+    });
+    state.questions.push(qn);
+    touchAppState();
+    renderSidebarCounts();
+    if (parseHash().name === "questions") renderQuestionsView();
+    return qn;
+  }
+  async function sendAsk() {
+    const text = D.askInput.value.trim();
+    if (!text || askUI.busy) return;
+    const ctx = askContext();
+    // 앞 대화는 최근 세 번까지만 — 늘 내 차례에서 시작하게
+    const history = askUI.turns.filter((t) => !t.pending).slice(-6).map((t) => ({ role: t.role, content: t.content }));
+    while (history.length && history[0].role !== "user") history.shift();
+    const userTurn = { role: "user", content: text };
+    const pending = { role: "assistant", content: "", pending: true };
+    askUI.turns.push(userTurn, pending);
+    askUI.busy = true; askUI.sel = "";
+    D.askInput.value = ""; autoGrow(D.askInput, 160);
+    renderAskDock();
+    try {
+      const { data: sess } = await sb.auth.getSession();
+      const tok = sess && sess.session ? sess.session.access_token : null;
+      if (!tok) throw new Error("로그인이 만료되었습니다. 다시 로그인해 주세요.");
+      const resp = await fetch(CLAUDE_FN, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", apikey: SUPABASE_KEY, Authorization: `Bearer ${tok}` },
+        body: JSON.stringify({ ask: true, messages: [...history, { role: "user", content: text }], context: ctx.forModel }),
+      });
+      const out = await resp.json().catch(() => ({}));
+      if (!resp.ok || out.error) throw new Error((out && out.error) ? out.error : `요청 실패 (${resp.status})`);
+      pending.content = String(out.text || "").trim() || "(빈 응답)";
+      delete pending.pending;
+      pending.noteId = fileQuestion(text, pending.content, out.note, ctx).id;
+    } catch (err) {
+      // 실패하면 물은 글과 선택을 되돌려 놓는다 — 아무것도 잃지 않게
+      askUI.turns = askUI.turns.filter((t) => t !== pending && t !== userTurn);
+      if (!D.askInput.value.trim()) { D.askInput.value = text; autoGrow(D.askInput, 160); }
+      if (!askUI.sel && ctx.selection) { askUI.sel = ctx.selection; askUI.selKey = askCtxKey(); }
+      toast("묻기 실패 — " + (err.message || String(err)));
+    }
+    askUI.busy = false;
+    renderAskDock();
+  }
+
+  let questionsState = { filter: "", cat: "all", star: "all", focus: null };
+  function questionCardHtml(q) {
+    const src = q.context.entryId ? findEntry(q.context.entryId) : null;
+    const id = escAttr(q.id);
+    return `<div class="qn-card${q.starred ? " is-starred" : ""}" data-qn="${id}">
+      <div class="pattern-row-top">
+        <span class="qn-cat qn-cat-${esc(q.category)}">${esc(ASK_CAT_LABEL[q.category] || "기타")}</span>
+        <span class="qn-title">${esc(q.title || "제목 없음")}</span>
+        <button type="button" class="pattern-star" data-qn-star="${id}" title="다시 볼 것">${q.starred ? "★" : "☆"}</button>
+        <button type="button" class="pattern-del" data-qn-del="${id}" title="이 질문 지우기">삭제</button>
+      </div>
+      <div class="qn-q"><span class="qn-q-mark">Q</span><span>${esc(q.q)}</span></div>
+      ${q.context.selection ? `<div class="qn-sel">“${esc(q.context.selection)}”</div>` : ""}
+      ${q.point ? `<div class="qn-point"><span class="qn-point-lbl">핵심</span>${esc(q.point)}</div>` : ""}
+      ${q.wrong || q.right ? `<div class="rev-diff-pair qn-pair">
+          ${q.wrong ? `<div class="rev-sent-row"><span class="rev-diff-lbl">✗</span><span class="rev-frag rev-x">${esc(q.wrong)}</span></div>` : ""}
+          ${q.right ? `<div class="rev-sent-row"><span class="rev-diff-lbl">✓</span><span class="rev-frag rev-o">${esc(q.right)}</span></div>` : ""}
+        </div>` : ""}
+      ${q.examples.length ? `<ul class="qn-ex">${q.examples.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}
+      <details class="qn-answer"><summary>답 전체 보기</summary><div class="msg-content">${mdInline(q.a)}</div></details>
+      <div class="pattern-foot">
+        <span>${esc(localHM(q.createdAt))}</span>
+        ${q.context.label ? `<span class="qn-src">${esc(q.context.label)}</span>` : ""}
+        ${src && isShown(src) ? `<button type="button" class="pattern-open" data-open-entry="${escAttr(src.id)}">열기 →</button>` : ""}
+        <button type="button" class="pattern-open" data-qn-follow="${id}">이어서 묻기 →</button>
+      </div>
+    </div>`;
+  }
+  function renderQuestionsView() {
+    const all = state.questions;
+    D.questionsSub.textContent = `${all.length}개의 질문 · 「바로 묻기」에서 물은 것이 핵심 · 틀린 형태 · 맞는 형태로 정리됩니다`;
+    D.questionsFilter.value = questionsState.filter;
+    D.questionsStarFilter.querySelectorAll("button").forEach((b) => b.classList.toggle("is-on", b.dataset.star === questionsState.star));
+    D.questionsCats.innerHTML =
+      `<button type="button" class="pat-cat${questionsState.cat === "all" ? " is-on" : ""}" data-cat="all">전체<span class="pat-cat-n">${all.length}</span></button>` +
+      ASK_CATS.map((c) => {
+        const n = all.filter((q) => q.category === c).length;
+        return n || questionsState.cat === c
+          ? `<button type="button" class="pat-cat qn-chip-${c}${questionsState.cat === c ? " is-on" : ""}" data-cat="${c}">${esc(ASK_CAT_LABEL[c])}<span class="pat-cat-n">${n}</span></button>` : "";
+      }).join("");
+    const f = questionsState.filter.trim().toLowerCase();
+    let list = all.slice();
+    if (questionsState.cat !== "all") list = list.filter((q) => q.category === questionsState.cat);
+    if (questionsState.star === "starred") list = list.filter((q) => q.starred);
+    if (f) list = list.filter((q) => [q.q, q.a, q.title, q.point, q.wrong, q.right, q.context.label].join(" ").toLowerCase().includes(f));
+    list.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+    if (!list.length) {
+      D.questionList.innerHTML = `<div class="list-empty">${all.length ? "거른 결과가 없습니다." : "아직 물어본 것이 없습니다. 오른쪽 「바로 묻기」에서 물어보면 여기에 오답노트로 정리됩니다."}</div>`;
+      return;
+    }
+    // 날짜별로 묶는다 — 그날 무엇에서 막혔는지가 한눈에
+    let html = "", day = "";
+    for (const q of list) {
+      const d = localDay(q.createdAt);
+      if (d !== day) { day = d; html += `<div class="qn-day">${esc(fmtDate(d))}</div>`; }
+      html += questionCardHtml(q);
+    }
+    D.questionList.innerHTML = html;
+    const focus = questionsState.focus; questionsState.focus = null;
+    const el = focus && D.questionList.querySelector(`[data-qn="${CSS.escape(focus)}"]`);
+    if (el) {
+      // renderRoute가 맨 위로 되돌린 뒤에 스크롤한다
+      setTimeout(() => { try { el.scrollIntoView({ block: "center" }); } catch (_) {} }, 0);
+      el.classList.add("is-flash"); setTimeout(() => el.classList.remove("is-flash"), 1600);
+    }
+  }
+  function wireAsk() {
+    D.questionsBtn.addEventListener("click", () => { go("#questions"); autoCloseSidebarIfNarrow(); });
+    D.askFab.addEventListener("click", () => setAskOpen(true, true));
+    D.askMin.addEventListener("click", () => setAskOpen(false));
+    D.askNew.addEventListener("click", () => { askUI.turns = []; renderAskLog(); try { D.askInput.focus(); } catch (_) {} });
+    D.askForm.addEventListener("submit", (ev) => { ev.preventDefault(); sendAsk(); });
+    D.askInput.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing && ev.keyCode !== 229) { ev.preventDefault(); sendAsk(); }
+      else if (ev.key === "Escape") { ev.preventDefault(); D.askInput.blur(); }
+    });
+    D.askInput.addEventListener("input", () => autoGrow(D.askInput, 160));
+    D.askInput.addEventListener("focus", paintAskCtx);
+    D.askDock.addEventListener("click", (ev) => {
+      if (ev.target.closest("[data-ask-selx]")) { askUI.sel = ""; paintAskSel(); return; }
+      const n = ev.target.closest("[data-ask-note]");
+      if (n) {
+        questionsState = { filter: "", cat: "all", star: "all", focus: n.dataset.askNote };
+        go("#questions"); autoCloseSidebarIfNarrow();
+      }
+    });
+    // 본문에서 드래그해 둔 부분 — 묻기 칸을 누르는 순간 선택이 풀리므로 미리 잡아 둔다
+    document.addEventListener("selectionchange", () => {
+      if (!user) return;
+      const s = window.getSelection && window.getSelection();
+      if (!s || s.isCollapsed || !s.anchorNode) return;
+      const node = s.anchorNode.nodeType === 1 ? s.anchorNode : s.anchorNode.parentElement;
+      if (!node || !D.main.contains(node)) return;
+      const text = s.toString().replace(/\s+/g, " ").trim();
+      if (!text) return;
+      askUI.sel = text.slice(0, 600); askUI.selKey = askCtxKey();
+      paintAskSel();
+    });
+
+    D.questionsFilter.addEventListener("input", () => { questionsState.filter = D.questionsFilter.value; renderQuestionsView(); });
+    D.questionsStarFilter.addEventListener("click", (ev) => {
+      const b = ev.target.closest("button[data-star]"); if (!b) return;
+      questionsState.star = b.dataset.star; renderQuestionsView();
+    });
+    D.questionsCats.addEventListener("click", (ev) => {
+      const b = ev.target.closest("[data-cat]"); if (!b) return;
+      questionsState.cat = b.dataset.cat; renderQuestionsView();
+    });
+    D.questionList.addEventListener("click", (ev) => {
+      const open = ev.target.closest("[data-open-entry]"); if (open) { go("#daily"); openEntry(open.dataset.openEntry); return; }
+      const star = ev.target.closest("[data-qn-star]");
+      if (star) {
+        const q = findQuestion(star.dataset.qnStar);
+        if (q) { q.starred = !q.starred; touchAppState(); renderQuestionsView(); }
+        return;
+      }
+      const del = ev.target.closest("[data-qn-del]");
+      if (del) {
+        const q = findQuestion(del.dataset.qnDel); if (!q) return;
+        if (!confirm(`이 질문을 지울까요?\n“${q.title || q.q.slice(0, 40)}”`)) return;
+        state.questions = state.questions.filter((x) => x.id !== q.id);
+        for (const t of askUI.turns) if (t.noteId === q.id) delete t.noteId;
+        touchAppState(); renderQuestionsView(); renderSidebarCounts(); renderAskLog();
+        return;
+      }
+      const fol = ev.target.closest("[data-qn-follow]");
+      if (fol) {
+        const q = findQuestion(fol.dataset.qnFollow); if (!q) return;
+        // 그 질문과 답을 앞 문맥으로 깔고 이어서 묻는다
+        askUI.turns = [{ role: "user", content: q.q }, { role: "assistant", content: q.a, noteId: q.id }];
+        setAskOpen(true, true);
+      }
+    });
+  }
+
   /* ─────────────────────── SEARCH ─────────────────────── */
   let searchState = { q: "", colors: new Set(), claude: false, from: "", to: "", author: "", cursor: 0, results: [] };
   function openSearch() {
@@ -3844,7 +4169,9 @@
     { anchor: () => D.wordsBtn, title: "나의 단어 · 나의 문장",
       text: "🟡로 표시한 단어가 <b>나의 단어</b>에 쌓입니다. 같은 단어를 나중에 다시 만나면 점선 밑줄이 붙고, 처음 만난 날과 문장을 보여줍니다.<br/>△로 물어본 문장은 <b>나의 문장</b>에 모입니다." },
     { anchor: () => D.patternsBtn, title: "역번역과 나의 패턴",
-      text: "역번역은 정답지를 가린 채 영어를 다시 만드는 훈련입니다. 제출하면 나란히 대조하고, 갈린 자리를 네 범주로 분석해 줍니다.<br/>담아 둔 갈림은 <b>나의 패턴</b>에 쌓여 약점 지도가 됩니다. 3일 뒤·2주 뒤에 같은 문단을 다시 씁니다." },
+      text: "역번역은 정답지를 가린 채 영어를 다시 만드는 훈련입니다. 제출하면 나란히 대조하고, 갈린 자리를 네 범주로 분석해 줍니다.<br/>담아 둔 갈림은 <b>나의 패턴</b>에 쌓여 약점 지도가 됩니다. 잘 떠올릴수록 간격이 벌어지는 망각곡선에 맞춰 같은 문단을 다시 씁니다." },
+    { anchor: () => (D.askDock.hidden ? D.askFab : D.askDock), title: "바로 묻기 · ⌘/",
+      text: "어느 화면에서든 오른쪽에서 바로 물어볼 수 있습니다. 지금 보고 있는 글을 함께 보고, 본문을 드래그해 두면 그 부분에 대해 답합니다.<br/>물은 것은 <b>질문 노트</b>에 핵심 · 틀린 형태 · 맞는 형태로 정리됩니다." },
     { anchor: () => D.projectsBtn, title: "프로젝트 — 다시 읽기",
       text: "같은 저자·작품의 기록이 자동으로 한 묶음이 됩니다. 열면 흑백 세리프의 아카이브로, 쓴 것을 작품처럼 다시 읽을 수 있습니다." },
     { anchor: () => D.tourBtn, title: "여기까지입니다",
@@ -3995,11 +4322,13 @@
     renderRecentList(); renderSidebarCounts();
     renderRoute();
     applySidebar();
+    initAsk();
     await pullAll();
     refreshSourceDatalists();
     renderRecentList(); renderSidebarCounts();
     // re-render whatever view is active
     renderRoute();
+    renderAskLog();   // 최근 질문 목록 — 클라우드에서 받아 온 질문 노트로
     // first run: show the tour once the real settings have arrived, so a second
     // device doesn't replay it
     if (!tourSeen()) setTimeout(() => { if (!tourSeen()) openTour(0); }, 400);
@@ -4054,6 +4383,7 @@
 
   /* ─────────────────────── WIRING ─────────────────────── */
   function wire() {
+    wireAsk();
     // auth
     D.authForm.addEventListener("submit", handleAuthSubmit);
     D.authTabs.addEventListener("click", (ev) => {
@@ -4563,6 +4893,12 @@
       if (mod && /^k$/i.test(ev.key)) { ev.preventDefault(); D.searchScrim.hidden ? openSearch() : closeSearch(); return; }
       if (mod && /^n$/i.test(ev.key)) { ev.preventDefault(); newEntry(); return; }
       if (mod && /^s$/i.test(ev.key)) { ev.preventDefault(); flushSyncNow(); flashStatus("저장됨"); return; }
+      // ⌘/ — 바로 묻기: 접혀 있으면 열고, 이미 쓰고 있으면 접는다
+      if (mod && ev.key === "/") {
+        ev.preventDefault();
+        if (askUI.open && document.activeElement === D.askInput) setAskOpen(false); else setAskOpen(true, true);
+        return;
+      }
       if (mod && (ev.key === "1" || ev.key === "2") && editing && pendingSel) { ev.preventDefault(); applyHighlight(ev.key === "1" ? "yellow" : "blue"); return; }
       if (!D.tour.hidden) {
         if (ev.key === "Escape") { ev.preventDefault(); closeTour(); }
@@ -4572,7 +4908,7 @@
       }
       if (ev.key === "Escape") { if (!D.modalScrim.hidden) closeModal(); else if (!D.searchScrim.hidden) closeSearch(); else { closeSlashMenu(); hideToolbar(); } hideWordTip(); }
     });
-    window.addEventListener("resize", () => { applySidebar(); if (!D.entryView.hidden) autoGrow(D.interpInput); if (!D.reverseView.hidden) autoGrow(D.revAttemptInput, 900); autoGrow(D.claudeInput, 160); hideToolbar(); hideWordTip(); });
+    window.addEventListener("resize", () => { applySidebar(); applyAskDock(); if (!D.entryView.hidden) autoGrow(D.interpInput); if (!D.reverseView.hidden) autoGrow(D.revAttemptInput, 900); autoGrow(D.claudeInput, 160); hideToolbar(); hideWordTip(); });
     window.addEventListener("hashchange", renderRoute);
     window.addEventListener("online", () => { online = true; flushSyncNow(); pullAndRefresh(); });
     window.addEventListener("offline", () => { online = false; });

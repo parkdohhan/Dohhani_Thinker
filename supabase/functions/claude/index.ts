@@ -392,6 +392,80 @@ function normalizeSpeechResult(parsed: any, fallbackText: string) {
   return out;
 }
 
+// === 바로 묻기 (ask) mode ===
+// A tutor docked beside every page. The reader fires a quick question; we answer
+// it and, in the same reply, file it as a 질문 노트 card (a mistakes notebook).
+const ASK_PROMPT = `You are an English tutor on call beside a Korean reader-writer who studies English every day — transcribing English literary and critical prose, and reverse-translating their own Korean academic writing into English. While they work they fire quick questions at you: grammar, what a word means or implies, collocations and prepositions, whether a sentence of theirs is correct, how to say something in natural English.
+
+Answer in Korean; keep English words, phrases and grammatical terms in English. Lead with the answer itself in one or two sentences, then the reason, then — when it helps — one or two short English example sentences. If they wrote an English sentence, say plainly whether it is correct and give the corrected form. Be concise and direct: no filler, no praise, no "좋은 질문". Use plain text with line breaks — no markdown headings or tables.`;
+
+const NOTE_INSTRUCTION = `
+--- After your answer ---
+Append exactly one block in this format and write NOTHING after it. It files this exchange in the reader's 질문 노트 (a mistakes notebook), so write it to be reread weeks later without the conversation:
+
+<note>
+{"title": "<질문의 요지 — 짧은 한국어 명사구, 24자 이내>",
+ "category": "grammar",
+ "point": "<핵심 한 줄 — 이것만 봐도 답이 떠오르게, 한국어>",
+ "wrong": "<헷갈렸거나 틀린 영어 형태 — 질문에 없었으면 빈 문자열>",
+ "right": "<맞는 영어 형태 — 해당 없으면 빈 문자열>",
+ "examples": ["<짧은 영어 예문 (한국어 뜻)>"]}
+</note>
+
+"category" is exactly one of: "grammar" (문법), "vocab" (단어의 뜻·뉘앙스), "usage" (연어·전치사·관사 같은 쓰임), "expression" (영어로 어떻게 말하나, 표현 고르기), "other". At most 2 examples. Strict JSON: double quotes, no trailing commas, no code fences.`;
+
+function buildAskSystem(ctx: any): string {
+  let base = ASK_PROMPT;
+  if (ctx && typeof ctx === "object") {
+    const clip = (x: any, n: number) => (typeof x === "string" && x.trim() ? x.trim().slice(0, n) : "");
+    const lines: string[] = [];
+    const where = clip(ctx.page, 40);
+    if (where) lines.push(`Where the reader is in the app: ${where}`);
+    const src = [ctx.author, ctx.title, ctx.pageNo].map((x: any) => clip(x, 200)).filter(Boolean).join(" · ");
+    if (src) lines.push(`Source: ${src}`);
+    const body = clip(ctx.body, 4000);
+    if (body) lines.push(`English passage on screen:\n${body}`);
+    const interp = clip(ctx.interpretation, 2000);
+    if (interp) lines.push(`The reader's Korean rendering of it:\n${interp}`);
+    const ko = clip(ctx.ko, 3000);
+    if (ko) lines.push(`Korean source they are reverse-translating:\n${ko}`);
+    const draft = clip(ctx.draft, 3000);
+    if (draft) lines.push(`Their English attempt so far:\n${draft}`);
+    const sel = clip(ctx.selection, 600);
+    if (sel) lines.push(`They selected this before asking — the question is probably about it:\n"${sel}"`);
+    if (lines.length) base += `\n\n--- What is on the reader's screen ---\n${lines.join("\n\n")}`;
+    if (ctx.drill === true) {
+      base += `\n\nThe reader is in the middle of a reverse-translation drill and has not seen the reference translation. Do not write out an English version of the Korean source or of whole sentences from it; help with exactly the point asked — a word, a structure, a grammar question — so the drill stays theirs.`;
+    }
+  }
+  return `${base}\n${NOTE_INSTRUCTION}`;
+}
+
+const ASK_CATS = ["grammar", "vocab", "usage", "expression", "other"];
+function splitNote(text: string): { reply: string; note: any } {
+  const m = /<note>\s*([\s\S]*?)\s*<\/note>/i.exec(text);
+  if (!m) {
+    // cut off mid-note (max_tokens) — never let the raw JSON tail read as part of the answer
+    const cut = text.search(/<note>/i);
+    return { reply: (cut >= 0 ? text.slice(0, cut) : text).trim(), note: null };
+  }
+  const raw = m[1].trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+  let o: any = null;
+  try { o = JSON.parse(raw); } catch { o = null; }
+  const s = (x: any, n: number) => (typeof x === "string" ? x.trim().slice(0, n) : "");
+  const note = o && typeof o === "object" ? {
+    title: s(o.title, 80),
+    category: ASK_CATS.includes(o.category) ? o.category : "other",
+    point: s(o.point, 400),
+    wrong: s(o.wrong, 300),
+    right: s(o.right, 300),
+    examples: (Array.isArray(o.examples) ? o.examples : [])
+      .filter((x: any) => typeof x === "string" && x.trim()).map((x: string) => x.trim().slice(0, 300)).slice(0, 3),
+  } : null;
+  const reply = (text.slice(0, m.index) + text.slice(m.index + m[0].length)).trim();
+  return { reply: reply || text.trim(), note };
+}
+
 // Appended to the system prompt when the frontend asks for structured "picks" —
 // the words/phrases the reader was unsure about, so they can be filed in 나의 단어 / 나의 문장.
 const EXTRACT_INSTRUCTION = `
@@ -479,9 +553,10 @@ Deno.serve(async (req) => {
   const isSegment = payload?.segment === true;
   const isReverse = !isSegment && payload?.reverse === true;
   const isSpeech = !isSegment && !isReverse && payload?.speech === true;
+  const isAsk = !isSegment && !isReverse && !isSpeech && payload?.ask === true;
   const reflect = typeof payload?.reflect === "string" ? payload.reflect : "";
-  const isReflect = !isSegment && !isReverse && !isSpeech && (reflect === "correct" || reflect === "expand" || reflect === "deep");
-  const extract = !isSegment && !isReverse && !isSpeech && !isReflect && payload?.extract === true;
+  const isReflect = !isSegment && !isReverse && !isSpeech && !isAsk && (reflect === "correct" || reflect === "expand" || reflect === "deep");
+  const extract = !isSegment && !isReverse && !isSpeech && !isAsk && !isReflect && payload?.extract === true;
 
   let messages: Array<{ role: string; content: string }>;
   let system: string;
@@ -536,9 +611,13 @@ Deno.serve(async (req) => {
         content: typeof m?.content === "string" ? m.content : String(m?.content ?? ""),
       }))
       .filter((m: any) => m.content.trim().length > 0);
+    // the dock keeps a rolling window of turns — never let it open on the assistant's side
+    if (isAsk) while (messages.length && messages[0].role === "assistant") messages.shift();
     if (!messages.length) return json({ error: "No non-empty messages to send." }, 400);
 
-    if (isReflect) {
+    if (isAsk) {
+      system = buildAskSystem(payload?.context);
+    } else if (isReflect) {
       system = buildReflectionSystem(payload?.context, reflect);
     } else {
       system = buildSystem(payload?.context);
@@ -558,7 +637,7 @@ Deno.serve(async (req) => {
       body: JSON.stringify({
         model: MODEL,
         // 분할 모드는 두 원문을 통째로 다시 받아써야 하므로 상한을 가장 넉넉히 잡는다
-        max_tokens: (isSegment || isReverse) ? 6000 : (isSpeech || isReflect) ? MAX_TOKENS_JSON : MAX_TOKENS,
+        max_tokens: (isSegment || isReverse) ? 6000 : (isSpeech || isReflect || isAsk) ? MAX_TOKENS_JSON : MAX_TOKENS,
         system,
         messages,
       }),
@@ -606,6 +685,10 @@ Deno.serve(async (req) => {
   if (isSpeech) return json({ speech: structured(normalizeSpeechResult), ...meta });
   if (isReverse) return json({ reverse: structured(normalizeReverseResult), ...meta });
   if (isReflect) return json({ reflect: structured((p, fb) => normalizeReflectResult(p, reflect, fb)), ...meta });
+  if (isAsk) {
+    const { reply, note } = splitNote(text);
+    return json({ text: reply, note, ...meta });
+  }
   if (extract) {
     const { reply, picks } = splitPicks(text);
     return json({ text: reply, picks, model: out?.model ?? MODEL, usage: out?.usage ?? null });
