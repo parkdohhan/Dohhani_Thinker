@@ -804,7 +804,8 @@ a { color: inherit; }
   background: var(--color-background-secondary); color: var(--color-text-secondary);
   border: 0.5px solid var(--color-border-tertiary);
 }
-.rev-stage-badge.stage-done { background: var(--color-background-success); color: var(--color-text-success); border-color: transparent; }
+/* 「굳음」 = 기억 강도 60일 이상. 끝난 게 아니라 곡선이 아주 완만해진 것 */
+.rev-stage-badge.stage-done, .rev-stage-badge.stage-settled { background: var(--color-background-success); color: var(--color-text-success); border-color: transparent; }
 .rev-stage-badge.is-due { background: var(--color-background-warning); color: var(--color-text-warning); border-color: transparent; }
 
 .rev-h {
@@ -979,7 +980,7 @@ a { color: inherit; }
   color: var(--color-text-tertiary); border: 0.5px solid var(--color-border-tertiary);
   border-radius: 8px; padding: 0 5px;
 }
-.recent-stage.stage-done { color: var(--color-text-success); }
+.recent-stage.stage-done, .recent-stage.stage-settled { color: var(--color-text-success); }
 .sr-kind { font-family: var(--font-korean); font-size: 10px; color: var(--color-text-tertiary); }
 
 /* ── 문단 카드 (필사·역번역 공용) ──
@@ -1284,6 +1285,10 @@ a { color: inherit; }
 .pat-review-input:focus { border-color: var(--color-text-tertiary); }
 .pat-review-input::placeholder { color: var(--color-text-tertiary); font-family: var(--font-korean); }
 .pat-review-foot { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+/* 세 등급 버튼 — 각자 누르면 다음 복습이 언제인지 아래에 적혀 있다 */
+.pat-grade { flex-wrap: wrap; }
+.pat-grade .rev-btn { display: inline-flex; flex-direction: column; align-items: center; gap: 1px; padding: 5px 13px; line-height: 1.3; }
+.pat-grade-when { font-family: var(--font-mono); font-size: 10px; opacity: 0.72; }
 .pat-review-mine { display: flex; gap: 8px; align-items: baseline; margin-bottom: 6px; }
 .pat-rev-done { color: var(--color-text-success); }
 

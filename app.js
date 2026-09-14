@@ -134,8 +134,112 @@
     "structure": "구조",
     "articles-prepositions": "관사·전치사",
   };
-  const REV_STAGES = ["new", "d3", "d14", "done"];
-  const REV_STAGE_LABEL = { new: "1차", d3: "3일", d14: "2주", done: "완료" };
+  /* ── 복습 주기 — 망각곡선 ──────────────────────────────────────────────
+     고정 사다리(3일 → 2주 → 끝)가 아니다. 문단·패턴마다 "기억 강도"(stability, 일)를
+     들고 다니고, 다음 복습 = 마지막 복습 + stability. 에빙하우스 곡선에서 stability는
+     기억이 흐려지기까지 버티는 시간이다.
+       · 잘 떠올리면 곡선이 완만해진다 → stability × ease (처음 2.5배)
+       · 겨우 떠올리면 조금만(×1.2) 늘고, ease가 깎여 다음 증가폭도 작아진다
+       · 잊었으면 1일로 되돌린다 — 곡선이 가장 가파른 첫날로
+       · 늦게 복습했는데도 떠올렸다면 그만큼 단단했다는 뜻 → 실제 경과일을 기준으로 늘린다
+     60일을 넘기면 「굳음」이지만 끝나지는 않는다 — 곡선에는 끝이 없다. */
+  const SRS_GRADES = ["again", "hard", "good", "easy"];
+  const SRS_GRADE_LABEL = { again: "잊음", hard: "겨우", good: "기억", easy: "쉬움" };
+  const SRS_EASE0 = 2.5, SRS_EASE_MIN = 1.3, SRS_EASE_MAX = 3.0;
+  const SRS_CAP = 180, SRS_SETTLED = 60;
+  // 첫 만남 뒤 첫 복습까지(일). 첫 시도는 '기억'이 아니라 처음 옮겨 본 것이라 ease를 건드리지 않는다.
+  const SRS_LEARN = { again: 1, hard: 1, good: 2, easy: 4 };
+  function addDaysISO(iso, days) {
+    const d = new Date(String(iso).slice(0, 10) + "T00:00:00");
+    d.setDate(d.getDate() + days);
+    const z = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())}`;
+  }
+  const daysBetween = (a, b) =>
+    Math.round((Date.parse(String(b).slice(0, 10) + "T00:00:00") - Date.parse(String(a).slice(0, 10) + "T00:00:00")) / 86400000);
+  // 이관된 항목들이 한날에 몰려 돌아오지 않도록, id로 결정되는 0–6일 흩뿌림
+  const srsSpread = (id) => { let h = 0; for (const c of String(id)) h = (h * 31 + c.charCodeAt(0)) >>> 0; return h % 7; };
+  const blankSrs = () => ({ stability: 0, ease: SRS_EASE0, reps: 0, lapses: 0, last: null });
+  // `legacy` = 옛 고정 사다리의 { stage, last }. 새 필드가 있으면 그것만 본다.
+  // 이관은 오늘 날짜에 의존하지 않는다 — 저장되기 전까지 매번 다시 이관되므로, 결과가 같아야 한다.
+  function normSrs(s, legacy) {
+    if (s && typeof s === "object" && Number.isFinite(Number(s.stability))) {
+      const n = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
+      return {
+        stability: clamp(n(s.stability, 0), 0, SRS_CAP),
+        ease: clamp(n(s.ease, SRS_EASE0), SRS_EASE_MIN, SRS_EASE_MAX),
+        reps: Math.max(0, Math.floor(n(s.reps, 0))),
+        lapses: Math.max(0, Math.floor(n(s.lapses, 0))),
+        last: typeof s.last === "string" && s.last ? s.last.slice(0, 10) : null,
+      };
+    }
+    const st = legacy && legacy.stage, last = (legacy && legacy.last) || null;
+    if (st === "d3") return { ...blankSrs(), stability: 3, reps: 1, last };
+    if (st === "d14") return { ...blankSrs(), stability: 14, reps: 2, last };
+    if (st === "done") return { ...blankSrs(), stability: 40, reps: 3, last };
+    return blankSrs();
+  }
+  // 옛 사다리에서 「완료」였던 항목은 다음 복습일이 없다. 곡선에 끝은 없으니
+  // 마지막 복습 + 40일(+흩뿌림)에 돌아오게 한다 — 이미 지났다면 지금이 그때다.
+  function legacyDue(legacy, id) {
+    if (!legacy || legacy.stage !== "done" || !legacy.last) return null;
+    return addDaysISO(legacy.last, 40 + srsSpread(id));
+  }
+  // 한 번의 인출 → 새 기억 강도와 다음 복습일. 순수 함수 — 버튼에 미리보기로도 쓴다.
+  function srsReview(srs, grade, today) {
+    today = today || todayISO();
+    if (!SRS_GRADES.includes(grade)) grade = "good";
+    const s = { ...(srs || blankSrs()) };
+    if (!(s.stability > 0)) {
+      s.stability = SRS_LEARN[grade];
+      s.reps = grade === "again" ? 0 : 1;
+    } else {
+      if (grade === "again") s.ease = Math.max(SRS_EASE_MIN, s.ease - 0.2);
+      else if (grade === "hard") s.ease = Math.max(SRS_EASE_MIN, s.ease - 0.15);
+      else if (grade === "easy") s.ease = Math.min(SRS_EASE_MAX, s.ease + 0.15);
+      if (grade === "again") {
+        s.stability = 1; s.reps = 0; s.lapses += 1;
+      } else {
+        const elapsed = s.last ? Math.max(0, daysBetween(s.last, today)) : s.stability;
+        const base = Math.max(s.stability, elapsed);
+        const mult = grade === "hard" ? 1.2 : grade === "easy" ? s.ease * 1.3 : s.ease;
+        s.stability = Math.min(SRS_CAP, Math.max(s.stability + 1, base * mult));
+        s.reps += 1;
+      }
+    }
+    s.last = today;
+    const days = Math.max(1, Math.round(s.stability));
+    return { srs: s, due: addDaysISO(today, days), days };
+  }
+  const srsIsNew = (s) => !s || !(s.stability > 0);
+  const srsIsSettled = (s) => !!s && s.stability >= SRS_SETTLED;
+  function srsLabel(s) {
+    if (srsIsNew(s)) return "1차";
+    if (srsIsSettled(s)) return "굳음";
+    return `${Math.max(1, Math.round(s.stability))}일`;
+  }
+  const srsClass = (s) => (srsIsNew(s) ? "stage-new" : srsIsSettled(s) ? "stage-settled" : "stage-learning");
+  const srsDaysLabel = (n) => (n <= 1 ? "내일" : `${n}일 뒤`);
+  // 역번역 한 번의 시도가 곧 한 번의 인출 테스트다. 떠올린 정도 = 오류의 무게.
+  //   의미를 놓친 갈림이 가장 무겁고(1.0), 문법(0.6), 격(0.3). 한 갈림은 가장 무거운 축 하나로만 센다.
+  //   목표 문장 약 20단어(한 문장쯤)당 무게로 나눠, 긴 문단이 불리하지 않게 한다.
+  // 분석이 깨졌으면 등급을 매기지 않는다 — 카드가 0장인 건 잘 떠올렸다는 뜻이 아니다.
+  // 일부만 건진 분석(partial)은 잃어버린 카드가 있으니 '기억'·'쉬움'을 줄 수 없다.
+  function gradeFromAnalysis(an, target) {
+    if (!an || an.parseError) return null;
+    const words = (String(target || "").match(/\S+/g) || []).length || 1;
+    let w = 0;
+    for (const d of an.diffs) {
+      if (d.meaning === "off") w += 1;
+      else if (d.grammar === "off") w += 0.6;
+      else if (d.register === "off") w += 0.3;
+      else w += (d.meaning || d.grammar || d.register) ? 0.3 : 0.6;   // 축 판정 없는 구버전 카드 = 0.6
+    }
+    const rate = w / Math.max(1, words / 20);
+    let g = rate === 0 ? "easy" : rate <= 0.35 ? "good" : rate <= 0.9 ? "hard" : "again";
+    if (an.partial && (g === "easy" || g === "good")) g = "hard";
+    return g;
+  }
   // 의미 보존 · 문법 정확 · register 적합 — 카드 하나가 받는 세 축 판정
   const REV_AXES = ["meaning", "grammar", "register"];
   const REV_AXIS_LABEL = { meaning: "의미", grammar: "문법", register: "격" };
@@ -310,6 +414,8 @@
       // 필사(맞는 문장 손으로 옮기기)를 다 마쳤는지 — 이게 true여야 다음 재시도 주기가 잡힌다.
       // 구버전 시도(필드 없음)는 옛 규칙으로 이미 주기를 탔으므로 분석이 있으면 완료로 간주.
       practiceDone: typeof a.practiceDone === "boolean" ? a.practiceDone : !!analysis,
+      // 이 시도로 매긴 인출 등급 (필사를 마친 순간 정해진다). 구버전 시도엔 없음.
+      grade: SRS_GRADES.includes(a.grade) ? a.grade : null,
     };
   }
   // One 문단 of a 역번역 document: the drill (koSource/target/attempts) plus the
@@ -317,13 +423,18 @@
   // correction history, and △ threads. Offsets are into `target`.
   function normRevPassage(p) {
     p = p && typeof p === "object" ? p : {};
+    const id = typeof p.id === "string" && p.id ? p.id : uid();
+    const attempts = Array.isArray(p.attempts) ? p.attempts.map(normRevAttempt) : [];
+    // 옛 사다리(stage) → 기억 강도. 마지막 복습일 = 마지막 시도 날짜.
+    const legacy = { stage: p.stage, last: attempts.length ? String(attempts[attempts.length - 1].timestamp).slice(0, 10) : null };
+    const nr = typeof p.nextRevisit === "string" && p.nextRevisit ? p.nextRevisit.slice(0, 10) : null;
     return {
-      id: typeof p.id === "string" && p.id ? p.id : uid(),
+      id,
       koSource: typeof p.koSource === "string" ? p.koSource : "",
       target: typeof p.target === "string" ? p.target : "",
-      attempts: Array.isArray(p.attempts) ? p.attempts.map(normRevAttempt) : [],
-      nextRevisit: typeof p.nextRevisit === "string" && p.nextRevisit ? p.nextRevisit.slice(0, 10) : null,
-      stage: REV_STAGES.includes(p.stage) ? p.stage : "new",
+      attempts,
+      srs: normSrs(p.srs, legacy),
+      nextRevisit: p.srs ? nr : (nr || legacyDue(legacy, id)),
       highlights: Array.isArray(p.highlights) ? p.highlights.filter((h) => h && h.endChar > h.startChar).map((h) => ({
         id: h.id || uid(), startChar: h.startChar | 0, endChar: h.endChar | 0,
         type: h.type === "blue" ? "blue" : "yellow", note: h.note || "",
@@ -371,8 +482,12 @@
   function normPattern(p) {
     p = p && typeof p === "object" ? p : {};
     const hits = Number(p.hits);
+    const id = typeof p.id === "string" && p.id ? p.id : uid();
+    // 옛 사다리(reviewStage) → 기억 강도. 마지막 복습일 = 담은 날 (없으면 이관하지 않는다 — 결정적이어야 하므로)
+    const legacy = { stage: p.reviewStage, last: typeof p.createdAt === "string" ? p.createdAt.slice(0, 10) : null };
+    const nr = typeof p.nextReview === "string" && p.nextReview ? p.nextReview.slice(0, 10) : null;
     return {
-      id: typeof p.id === "string" && p.id ? p.id : uid(),
+      id,
       mine: typeof p.mine === "string" ? p.mine : "",
       targetFrag: typeof p.targetFrag === "string" ? p.targetFrag : "",
       // 한국어 조각 — 있어야 회수(재-역번역) 드릴에 들어간다. 구버전 패턴엔 없음.
@@ -383,9 +498,9 @@
       sourceEntryId: typeof p.sourceEntryId === "string" ? p.sourceEntryId : "",
       createdAt: p.createdAt || nowISO(),
       hits: Number.isFinite(hits) && hits >= 1 ? Math.floor(hits) : 1,
-      // 담긴 것으로 끝나지 않도록: 담기는 순간 복습이 예약된다 (d3 → d14 → done)
-      reviewStage: p.reviewStage === "d14" || p.reviewStage === "done" ? p.reviewStage : "d3",
-      nextReview: typeof p.nextReview === "string" && p.nextReview ? p.nextReview.slice(0, 10) : null,
+      // 담긴 것으로 끝나지 않도록: 담기는 순간 복습이 예약되고, 떠올린 정도에 따라 간격이 벌어진다
+      srs: normSrs(p.srs, legacy),
+      nextReview: p.srs ? nr : (nr || legacyDue(legacy, id)),
     };
   }
 
@@ -1218,7 +1333,8 @@
     return state.patterns.find((p) => patKey(p.mine, p.targetFrag) === key) || null;
   }
   // Same mine→targetFrag pair filed again = a repeated failure, so bump hits instead of duplicating.
-  // 담는 순간 복습이 예약된다 — 컬렉션이 아니라 회수 루프의 입구. 반복 실패는 주기를 처음(+3일)으로 되돌린다.
+  // 담는 순간 복습이 예약된다 — 컬렉션이 아니라 회수 루프의 입구.
+  // 같은 갈림을 또 담았다는 건 잊었다는 뜻 — 곡선의 첫날로 되돌린다.
   function filePattern(diff, entryId) {
     if (!Array.isArray(state.patterns)) state.patterns = [];
     const key = patKey(diff.mine, diff.targetFrag);
@@ -1227,18 +1343,21 @@
       hit.hits += 1;
       if (diff.note && !hit.note) hit.note = diff.note;
       if (diff.ko && !hit.ko) hit.ko = diff.ko;
-      hit.reviewStage = "d3"; hit.nextReview = plusDaysISO(3);
+      const r = srsReview(hit.srs, "again");
+      hit.srs = r.srs; hit.nextReview = r.due;
       return "hit";
     }
+    // 방금 틀려서 맞는 형태를 봤다 — '겨우'로 곡선을 시작한다 (첫 복습 내일)
+    const r = srsReview(blankSrs(), "hard");
     state.patterns.push(normPattern({
       mine: diff.mine, targetFrag: diff.targetFrag, ko: diff.ko || "", category: diff.category, note: diff.note,
       starred: false, sourceEntryId: entryId || "", createdAt: nowISO(), hits: 1,
-      reviewStage: "d3", nextReview: plusDaysISO(3),
+      srs: r.srs, nextReview: r.due,
     }));
     return "new";
   }
-  // 회수 드릴에 들어갈 수 있는 패턴: 한국어 조각이 있고, 복습일이 도래했고, 아직 주기가 안 끝난 것
-  const patDue = (p) => !!p.ko && !!p.nextReview && p.nextReview <= todayISO() && p.reviewStage !== "done";
+  // 회수 드릴에 들어갈 수 있는 패턴: 한국어 조각이 있고 복습일이 도래한 것 (곡선에 '끝'은 없다)
+  const patDue = (p) => !!p.ko && !!p.nextReview && p.nextReview <= todayISO();
   const duePatterns = () => (Array.isArray(state.patterns) ? state.patterns.filter(patDue) : []);
 
   /* ── reverse entry view ── */
@@ -1265,20 +1384,21 @@
     if (!e || e.kind !== "reverse") return false;
     return revPassages(e).some(revDueOn);
   }
-  // the document's stage = the least advanced 문단 still in the cycle
-  function revEntryStage(e) {
+  // 문서의 기억 강도 = 가장 약한 문단. 오늘 할 차례인 문단이 있으면 그중 가장 약한 것.
+  function revEntrySrs(e) {
     const ps = revPassages(e);
-    if (!ps.length) return "new";
+    if (!ps.length) return blankSrs();
     const due = ps.filter(revDueOn);
-    if (due.length) return due.sort((a, b) => String(a.nextRevisit).localeCompare(String(b.nextRevisit)))[0].stage;
-    return ps.map((p) => p.stage).sort((a, b) => REV_STAGES.indexOf(a) - REV_STAGES.indexOf(b))[0];
+    return (due.length ? due : ps).reduce((m, p) => (!m || p.srs.stability < m.stability ? p.srs : m), null);
   }
   const revEntryNextRevisit = (e) =>
     revPassages(e).map((p) => p.nextRevisit).filter(Boolean).sort()[0] || null;
-  function revAdvanceStage(rv) {
-    if (rv.stage === "new") { rv.stage = "d3"; rv.nextRevisit = plusDaysISO(3); }
-    else if (rv.stage === "d3") { rv.stage = "d14"; rv.nextRevisit = plusDaysISO(14); }
-    else { rv.stage = "done"; rv.nextRevisit = null; }
+  // 한 문단의 배지 — 기억 강도(1차 / N일 / 굳음), 오늘 할 차례면 강조
+  const revBadgeHtml = (p) =>
+    `<span class="rev-stage-badge ${srsClass(p.srs)}${revDueOn(p) ? " is-due" : ""}">${esc(srsLabel(p.srs))}</span>`;
+  function paintRevBadge(rv) {
+    D.revStageBadge.textContent = srsLabel(rv.srs);
+    D.revStageBadge.className = "rev-stage-badge " + srsClass(rv.srs) + (revDueOn(rv) ? " is-due" : "");
   }
 
   function renderReverseEntry() {
@@ -1296,8 +1416,7 @@
     renderCorpusSeg(D.revCorpusSeg, e);
     D.revAuthor.value = e.source.author; D.revTitle.value = e.source.title; D.revPage.value = e.source.page;
     D.revStageBadge.hidden = false;
-    D.revStageBadge.textContent = REV_STAGE_LABEL[rv.stage] || "1차";
-    D.revStageBadge.className = "rev-stage-badge stage-" + rv.stage + (revDueOn(rv) ? " is-due" : "");
+    paintRevBadge(rv);
     renderRevPassageCards(e, ps, rv);
 
     D.revSetup.hidden = revMode !== "setup";
@@ -1328,8 +1447,8 @@
       const bits = [];
       if (rv.attempts.length) bits.push(`지금까지 ${rv.attempts.length}번 제출`);
       if (rv.nextRevisit) bits.push(revDueOn(rv) ? "오늘 재시도" : `다음 재시도 ${fmtDate(rv.nextRevisit)}`);
-      else if (rv.stage === "done") bits.push("주기 완료");
-      else {
+      if (!srsIsNew(rv.srs)) bits.push(`기억 ${srsLabel(rv.srs)}${rv.srs.lapses ? ` · 잊은 적 ${rv.srs.lapses}번` : ""}`);
+      if (!rv.nextRevisit) {
         const lastAn = [...rv.attempts].reverse().find((a) => a.analysis);
         if (lastAn && !lastAn.practiceDone) bits.push("필사 미완 — 오류 문장을 다 옮겨 적어야 재시도가 예약됩니다");
       }
@@ -1360,7 +1479,7 @@
       return `<div class="passage-card rev-pass-card" data-revpass="${escAttr(p.id)}" role="button" tabindex="0" title="이 문단으로 전환">
         <div class="passage-card-h">
           <span class="passage-card-num">문단 ${n}</span>
-          <span class="passage-card-meta"><span class="rev-stage-badge stage-${p.stage}${revDueOn(p) ? " is-due" : ""}">${esc(REV_STAGE_LABEL[p.stage])}</span>${done ? ` ${done}회` : ""}</span>
+          <span class="passage-card-meta">${revBadgeHtml(p)}${done ? ` ${done}회` : ""}</span>
         </div>
         <div class="passage-card-body tall">${ko ? esc(ko) : '<i style="opacity:.5">(빈 원문)</i>'}</div>
         <button class="passage-card-del" data-revpassdel="${escAttr(p.id)}" title="이 문단 삭제">× 삭제</button>
@@ -1471,18 +1590,20 @@
     if (!at || !at.analysis) return 0;
     return at.analysis.diffs.filter((d) => !diffPracticed(d, revPracticeModel(target, d))).length;
   }
-  // 필사를 모두 마친 순간에만 다음 재시도 주기가 잡힌다 — 제출만으로는 진행되지 않는다.
+  // 필사를 모두 마친 순간에만 다음 재시도가 잡힌다 — 제출만으로는 진행되지 않는다.
+  // 간격은 이번에 얼마나 잘 떠올렸는지(분석의 오류 무게)가 정한다.
   function markAttemptPracticed(e, rv, at) {
     if (at.practiceDone) return false;
+    const grade = gradeFromAnalysis(at.analysis, rv.target);
+    if (!grade) return false;                       // 분석이 깨졌으면 주기를 건드리지 않는다
     at.practiceDone = true;
-    revAdvanceStage(rv);
+    at.grade = grade;
+    const r = srsReview(rv.srs, grade);
+    rv.srs = r.srs; rv.nextRevisit = r.due;
     touchEntry(e);
     renderRecentList(); renderSidebarCounts();
-    if (currentId === e.id) {
-      D.revStageBadge.textContent = REV_STAGE_LABEL[rv.stage] || "1차";
-      D.revStageBadge.className = "rev-stage-badge stage-" + rv.stage + (revDueOn(rv) ? " is-due" : "");
-    }
-    toast(rv.nextRevisit ? `필사 완료 — 다음 재시도 ${fmtDate(rv.nextRevisit)} 예약` : "필사 완료 — 재시도 주기를 마쳤습니다");
+    if (currentId === e.id) paintRevBadge(rv);
+    toast(`${SRS_GRADE_LABEL[grade]} — 다음 재시도 ${srsDaysLabel(r.days)} (${fmtDate(r.due)})`);
     return true;
   }
   // `ctx` = { entryId, attemptText, target } → live compare card (sentence context +
@@ -1845,7 +1966,8 @@
       toast("대조 분석 완료");
       // 옮겨 적을 문장이 하나도 없으면(오류 0개, 또는 전부 목표 조각 없는 diff)
       // 필사 단계가 없으므로 바로 다음 재시도 주기가 잡힌다
-      if (!revPracticeRemaining(at, rv.target)) markAttemptPracticed(e, rv, at);
+      // (분석이 깨졌으면 카드가 0장이라 '옮길 문장 없음'처럼 보인다 — 그걸 완벽한 인출로 치면 안 된다)
+      if (!at.analysis.parseError && !revPracticeRemaining(at, rv.target)) markAttemptPracticed(e, rv, at);
     } catch (err) {
       toast("Claude 호출 실패 — " + (err.message || String(err)));
     } finally {
@@ -2713,8 +2835,8 @@
   function recentItemHtml(e, today) {
     const dot = e.date === today ? '<span class="recent-dot"></span>' : "";
     const lbl = srcLabel(e) || "제목 없음";
-    const stage = e.kind === "reverse"
-      ? `<span class="recent-stage stage-${revEntryStage(e)}">${esc(REV_STAGE_LABEL[revEntryStage(e)])}</span>` : "";
+    const es = e.kind === "reverse" ? revEntrySrs(e) : null;
+    const stage = es ? `<span class="recent-stage ${srsClass(es)}">${esc(srsLabel(es))}</span>` : "";
     return `<li><button type="button" class="recent-item${e.id === currentId && parseHash().name === "daily" ? " is-active" : ""}" data-id="${escAttr(e.id)}">
       <span class="recent-item-date">${dot}${esc(fmtMD(e.date))}${stage}</span>
       <span class="recent-item-src">${esc(lbl)}</span>
@@ -3135,13 +3257,12 @@
         for (const ps of (e.reverse && e.reverse.passages) || []) {
           if (!(ps.koSource || "").trim() && !ps.attempts.length) continue;
           const latest = [...ps.attempts].reverse().find((a) => a.analysis) || null;
-          const due = ps.nextRevisit && ps.nextRevisit <= todayISO() && ps.stage !== "done";
           html += `<div class="nb-pass">
             <div class="nb-ko">${esc((ps.koSource || "").trim().slice(0, 180))}</div>
             <div class="nb-pass-meta">
-              <span class="rev-stage-badge${ps.stage === "done" ? " stage-done" : ""}${due ? " is-due" : ""}">${esc(REV_STAGE_LABEL[ps.stage] || ps.stage)}</span>
+              ${revBadgeHtml(ps)}
               <span>시도 ${ps.attempts.length}회</span>
-              ${ps.nextRevisit && ps.stage !== "done" ? `<span>다음 재시도 ${esc(fmtDate(ps.nextRevisit))}</span>` : ""}
+              ${ps.nextRevisit ? `<span>다음 재시도 ${esc(fmtDate(ps.nextRevisit))}</span>` : ""}
             </div>
             ${latest && latest.analysis.verdict ? `<div class="nb-verdict">${esc(latest.analysis.verdict)}</div>` : ""}
             ${latest && latest.analysis.better.length ? `<div class="nb-better">${latest.analysis.better.slice(0, 2).map((b) =>
@@ -3475,9 +3596,11 @@
     const revealed = patReviewUI.open.has(p.id);
     const draft = patReviewUI.drafts.get(p.id) || "";
     const id = escAttr(p.id);
+    // 버튼마다 누르면 다음 복습이 언제가 되는지 미리 보여준다 — 곡선이 눈에 보이게
+    const pv = (g) => srsDaysLabel(srsReview(p.srs, g).days);
     return `<div class="pat-review-card" data-patrevcard="${id}">
       <div class="pat-review-top">${revCatBadge(p.category)}${p.hits > 1 ? `<span class="pattern-hits">${p.hits}회 반복</span>` : ""}
-        <span class="pat-review-stage">${p.reviewStage === "d14" ? "2주 복습" : "3일 복습"}</span></div>
+        <span class="pat-review-stage">기억 ${esc(srsLabel(p.srs))}</span></div>
       <div class="pat-review-ko">${esc(p.ko)}</div>
       ${revealed
         ? `${draft.trim() ? `<div class="pat-review-mine"><span class="rev-diff-lbl">이번</span><span class="rev-frag">${esc(draft)}</span></div>` : ""}
@@ -3486,9 +3609,10 @@
              <div class="rev-sent-row"><span class="rev-diff-lbl">목표</span><span class="rev-frag rev-o">${esc(p.targetFrag) || "—"}</span></div>
            </div>
            ${p.note ? `<div class="pattern-note">${esc(p.note)}</div>` : ""}
-           <div class="pat-review-foot">
-             <button type="button" class="rev-btn rev-btn--primary" data-patrev-ok="${id}">맞았다 — ${p.reviewStage === "d3" ? "2주 뒤 한 번 더" : "주기 완료"}</button>
-             <button type="button" class="rev-btn rev-btn--ghost" data-patrev-again="${id}">틀렸다 — 3일 뒤 다시</button>
+           <div class="pat-review-foot pat-grade">
+             <button type="button" class="rev-btn rev-btn--ghost" data-patrev-grade="again" data-patrev-id="${id}">잊었다<span class="pat-grade-when">${pv("again")}</span></button>
+             <button type="button" class="rev-btn" data-patrev-grade="hard" data-patrev-id="${id}">겨우 떠올렸다<span class="pat-grade-when">${pv("hard")}</span></button>
+             <button type="button" class="rev-btn rev-btn--primary" data-patrev-grade="good" data-patrev-id="${id}">바로 떠올렸다<span class="pat-grade-when">${pv("good")}</span></button>
            </div>`
         : `<textarea class="pat-review-input" data-patrev-input="${id}" spellcheck="false"
              placeholder="정답을 보지 않고, 위 한국어를 영어로 다시 만들어 봅니다.">${esc(draft)}</textarea>
@@ -3498,7 +3622,7 @@
   function renderPatternsView() {
     if (!Array.isArray(state.patterns)) state.patterns = [];
     const all = state.patterns;
-    D.patternsSub.textContent = `${all.length}개의 패턴 · 담기는 순간 복습(3일 → 2주)이 예약됩니다 — 같은 갈림이 반복되면 횟수가 올라갑니다`;
+    D.patternsSub.textContent = `${all.length}개의 패턴 · 담는 순간 복습이 잡히고, 떠올린 정도에 따라 간격이 벌어집니다 — 같은 갈림을 또 틀리면 처음으로 돌아갑니다`;
     D.patternsFilter.value = patternsState.filter;
     D.patternsStarFilter.querySelectorAll("button").forEach((b) => b.classList.toggle("is-on", b.dataset.star === patternsState.star));
 
@@ -3548,8 +3672,7 @@
         <div class="pattern-foot">
           <span>${esc(fmtDate(p.createdAt))}</span>
           ${!p.ko ? `<span title="한국어 조각이 없어 복습 드릴에 들어가지 않습니다 (구버전·발표 패턴)">복습 대상 아님</span>`
-            : p.reviewStage === "done" ? `<span class="pat-rev-done">복습 완료</span>`
-            : p.nextReview ? `<span>다음 복습 ${esc(fmtDate(p.nextReview))}</span>` : ""}
+            : p.nextReview ? `<span class="${srsIsSettled(p.srs) ? "pat-rev-done" : ""}">기억 ${esc(srsLabel(p.srs))} · 다음 복습 ${esc(fmtDate(p.nextReview))}</span>` : ""}
           ${src ? `<button type="button" class="pattern-open" data-open-entry="${escAttr(src.id)}">${esc(srcLabel(src) || "이 역번역")} 열기 →</button>` : ""}
         </div>
       </div>`;
@@ -3622,7 +3745,7 @@
         snip = snippet(hit, q);
         colors = [...new Set(ps.flatMap((p) => p.highlights.map((h) => h.type)))].map((c) => `<span class="dot ${c === "yellow" ? "dot-y" : "dot-b"}" style="display:inline-block;width:7px;height:7px;border-radius:2px;"></span>`).join(" ");
         hasC = ps.some((p) => p.threads.some((t) => t.messages.length)) ? "△" : "";
-        kindTag = `<span class="sr-kind">역번역 · ${esc(REV_STAGE_LABEL[revEntryStage(e)])}${ps.length > 1 ? ` · ${ps.length}문단` : ""}</span>`;
+        kindTag = `<span class="sr-kind">역번역 · ${esc(srsLabel(revEntrySrs(e)))}${ps.length > 1 ? ` · ${ps.length}문단` : ""}</span>`;
       } else {
         const fields = [e.body, e.interpretation].concat(e.threads.flatMap((t) => t.messages.map((m) => m.content)));
         const hit = (q && fields.find((f) => f.toLowerCase().includes(ql))) || e.body || e.interpretation || "";
@@ -4126,24 +4249,17 @@
         if (p && card) card.outerHTML = patReviewCardHtml(p);
         return;
       }
-      const ok = ev.target.closest("[data-patrev-ok]");
-      const again = ev.target.closest("[data-patrev-again]");
-      if (ok || again) {
-        const id = (ok || again).dataset.patrevOk || (ok || again).dataset.patrevAgain;
+      const gb = ev.target.closest("[data-patrev-grade]");
+      if (gb) {
+        const id = gb.dataset.patrevId, grade = gb.dataset.patrevGrade;
         const p = state.patterns.find((x) => x.id === id); if (!p) return;
-        if (ok) {
-          if (p.reviewStage === "d3") { p.reviewStage = "d14"; p.nextReview = plusDaysISO(14); }
-          else { p.reviewStage = "done"; p.nextReview = null; }
-        } else {
-          p.hits += 1;
-          p.reviewStage = "d3"; p.nextReview = plusDaysISO(3);
-        }
+        if (grade === "again") p.hits += 1;
+        const r = srsReview(p.srs, grade);
+        p.srs = r.srs; p.nextReview = r.due;
         patReviewUI.open.delete(id); patReviewUI.drafts.delete(id);
         touchAppState();
         renderPatternsView(); renderSidebarCounts(); renderRevisitList();
-        toast(ok
-          ? (p.reviewStage === "done" ? "복습 주기 완료" : `다음 복습 ${fmtDate(p.nextReview)}`)
-          : `3일 뒤 다시 나옵니다 — 반복 ${p.hits}회`);
+        toast(`${SRS_GRADE_LABEL[grade]} — 다음 복습 ${srsDaysLabel(r.days)}${grade === "again" ? ` · 반복 ${p.hits}회` : ""}`);
         return;
       }
       const open = ev.target.closest("[data-open-entry]"); if (open) { go("#daily"); openEntry(open.dataset.openEntry); return; }
