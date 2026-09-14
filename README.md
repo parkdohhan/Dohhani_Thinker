@@ -97,7 +97,7 @@ Entry  { id, date, kind:'transcription'|'reverse'|'speech',   // legacy 'reflect
      + reverse:{ koSource, target,                       // target: never rendered while writing
                  attempts:[{ id, timestamp, text,        // append-only
                              analysis: null | { verdict,
-                               diffs:[{mine,targetFrag,category,note,practice}],
+                               diffs:[{mine,targetFrag,ko,fixed,category,note,practice}],  // fixed = 옳은 문장: my sentence, minimally repaired
                                better:[…] } }],
                  srs:{ stability, ease, reps, lapses, last },   // forgetting-curve state; stability 0 = never reviewed
                  nextRevisit: null|'YYYY-MM-DD' }                // = last + stability

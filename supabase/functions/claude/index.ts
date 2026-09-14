@@ -157,6 +157,8 @@ A difference where ALL THREE axes are "ok" is an ACCEPTABLE VARIANT — a legiti
 
 For each diff also quote "ko" — the fragment of the Korean source this divergence corresponds to, copied verbatim from the Korean source (the shortest span that carries it). It seeds a later Korean-only retrieval drill, so it must stand alone as a prompt.
 
+For each diff also give "fixed" — the reader's WHOLE sentence that contains "mine" (the full sentence as it stands in the attempt, not just the fragment), minimally repaired: fix its grammar errors and meaning slips, but keep the reader's own structure, word order and word choices wherever they are already acceptable. Do NOT move it toward the target's wording or register — it shows how the reader's own sentence should have been written, and it sits next to the target as a separate reference. If that sentence has no grammar or meaning problem (a register-only diff), return it unchanged. When several diffs fall in the same sentence, each one's "fixed" is the same fully repaired sentence.
+
 Where the reader's wording is clearly BETTER than the target, put it in "better" and say why in Korean.
 
 Be precise and concise. Write all notes in Korean, plain analytic register (분석체 — no 존댓말, no praise, no filler); keep English words, phrases and grammatical terms in English. Ignore trivial differences: capitalization, punctuation style, obvious typos, pure whitespace.
@@ -169,6 +171,7 @@ Return STRICT JSON only — no markdown fences, no prose before or after. Schema
     {"mine": "<내 표현 — attempt에서 그대로 인용>",
      "targetFrag": "<대응하는 target 표현 — target에서 그대로 인용>",
      "ko": "<대응하는 한국어 조각 — Korean source에서 그대로 인용>",
+     "fixed": "<mine이 들어 있는 내 문장 전체 — 내 구조·단어는 그대로 두고 문법·의미만 최소로 고친 것>",
      "category": "lexis-register",
      "meaning": "ok", "grammar": "off", "register": "ok",
      "note": "<왜 오류인지 한 문장>"}
@@ -231,6 +234,7 @@ function normalizeReverseResult(parsed: any, fallbackText: string) {
           mine: typeof x.mine === "string" ? x.mine.slice(0, 400) : "",
           targetFrag: typeof x.targetFrag === "string" ? x.targetFrag.slice(0, 400) : "",
           ko: typeof x.ko === "string" ? x.ko.slice(0, 400) : "",
+          fixed: typeof x.fixed === "string" ? x.fixed.slice(0, 600) : "",
           category: CATEGORIES.includes(x.category) ? x.category : "structure",
           meaning: axis(x.meaning), grammar: axis(x.grammar), register: axis(x.register),
           note: typeof x.note === "string" ? x.note.slice(0, 800) : "",
@@ -554,7 +558,7 @@ Deno.serve(async (req) => {
       body: JSON.stringify({
         model: MODEL,
         // 분할 모드는 두 원문을 통째로 다시 받아써야 하므로 상한을 가장 넉넉히 잡는다
-        max_tokens: isSegment ? 6000 : (isReverse || isSpeech || isReflect) ? MAX_TOKENS_JSON : MAX_TOKENS,
+        max_tokens: (isSegment || isReverse) ? 6000 : (isSpeech || isReflect) ? MAX_TOKENS_JSON : MAX_TOKENS,
         system,
         messages,
       }),

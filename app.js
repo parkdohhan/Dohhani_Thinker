@@ -372,6 +372,8 @@
       targetFrag: typeof d.targetFrag === "string" ? d.targetFrag : "",
       // 이 갈림에 대응하는 한국어 조각 — 나중에 한국어만 보고 재-역번역하는 회수 드릴의 씨앗
       ko: typeof d.ko === "string" ? d.ko : "",
+      // 옳은 문장 — 내 문장을 내 구조 그대로 두고 문법·의미만 고친 것. 구버전 분석엔 없음.
+      fixed: typeof d.fixed === "string" ? d.fixed : "",
       category: REV_CATEGORIES.includes(d.category) ? d.category : "structure",
       meaning: normAxis(d.meaning), grammar: normAxis(d.grammar), register: normAxis(d.register),
       note: typeof d.note === "string" ? d.note : "",
@@ -492,6 +494,8 @@
       targetFrag: typeof p.targetFrag === "string" ? p.targetFrag : "",
       // 한국어 조각 — 있어야 회수(재-역번역) 드릴에 들어간다. 구버전 패턴엔 없음.
       ko: typeof p.ko === "string" ? p.ko : "",
+      // 옳은 문장 — 담을 때 분석에 있었으면 함께 온다
+      fixed: typeof p.fixed === "string" ? p.fixed : "",
       category: REV_CATEGORIES.includes(p.category) ? p.category : "structure",
       note: typeof p.note === "string" ? p.note : "",
       starred: !!p.starred,
@@ -1343,6 +1347,7 @@
       hit.hits += 1;
       if (diff.note && !hit.note) hit.note = diff.note;
       if (diff.ko && !hit.ko) hit.ko = diff.ko;
+      if (diff.fixed && !hit.fixed) hit.fixed = diff.fixed;
       const r = srsReview(hit.srs, "again");
       hit.srs = r.srs; hit.nextReview = r.due;
       return "hit";
@@ -1350,7 +1355,7 @@
     // 방금 틀려서 맞는 형태를 봤다 — '겨우'로 곡선을 시작한다 (첫 복습 내일)
     const r = srsReview(blankSrs(), "hard");
     state.patterns.push(normPattern({
-      mine: diff.mine, targetFrag: diff.targetFrag, ko: diff.ko || "", category: diff.category, note: diff.note,
+      mine: diff.mine, targetFrag: diff.targetFrag, ko: diff.ko || "", fixed: diff.fixed || "", category: diff.category, note: diff.note,
       starred: false, sourceEntryId: entryId || "", createdAt: nowISO(), hits: 1,
       srs: r.srs, nextReview: r.due,
     }));
@@ -1559,7 +1564,7 @@
       const n = a.analysis ? a.analysis.diffs.length : null;
       // read-only: fragments only, never whole target sentences — state A must stay covered
       const an = a.analysis
-        ? `<details class="rev-prior-analysis"><summary>분석 보기${n != null ? ` · 오류 ${n}개` : ""}</summary>${revAnalysisHtml(a.analysis, null)}</details>`
+        ? `<details class="rev-prior-analysis"><summary>분석 보기${n != null ? ` · 오류 ${n}개` : ""}</summary>${revAnalysisHtml(a.analysis, null, a.text)}</details>`
         : `<div class="rev-prior-noan">— 분석 없음</div>`;
       return `<div class="rev-prior-item">
         <div class="rev-prior-h">${i + 1}번째 시도 · ${esc(fmtDate(a.timestamp))} ${esc(String(a.timestamp).slice(11, 16))}</div>
@@ -1606,9 +1611,26 @@
     toast(`${SRS_GRADE_LABEL[grade]} — 다음 재시도 ${srsDaysLabel(r.days)} (${fmtDate(r.due)})`);
     return true;
   }
+  // 옳은 문장 — 내 문장을 내 구조 그대로 두고 문법·의미만 최소로 고친 것.
+  // 목표(또 하나의 번역)와 따로, "내가 쓰려던 문장이 맞게 쓰였다면"을 보여준다.
+  // 고친 단어만 칠한다(내 문장과의 단어 diff). 내 문장을 못 찾으면 칠하지 않고 그대로.
+  // 구버전 분석(fixed 없음)이면 행 자체를 그리지 않는다.
+  function revFixedRow(mineSentence, fixed) {
+    const f = String(fixed || "").trim();
+    if (!f) return "";
+    let body;
+    if (mineSentence && revNormForMatch(mineSentence) === revNormForMatch(f)) {
+      body = `${esc(f)}<span class="rev-fix-same">문법·의미는 이미 맞음</span>`;
+    } else if (mineSentence) {
+      const wd = wordDiff(mineSentence, f);
+      body = wd.skipped || !wd.changes ? esc(f) : wdRender(wd.b, wd.right, "rev-fix");
+    } else body = esc(f);
+    return `<div class="rev-sent-row rev-fixed-row"><span class="rev-diff-lbl">옳은</span><span class="rev-sent">${body}</span></div>`;
+  }
   // `ctx` = { entryId, attemptText, target } → live compare card (sentence context +
-  // 담기 picker + 필사 box). `null` → read-only fragment pairs for the prior-attempt list.
-  function revAnalysisHtml(an, ctx) {
+  // 담기 picker + 필사 box). `null` → read-only fragment pairs for the prior-attempt list
+  // (`attemptText` there only anchors the 옳은 문장's marks — no target sentence is shown).
+  function revAnalysisHtml(an, ctx, attemptText) {
     if (!an) return "";
     const retryBtn = ctx ? `<button type="button" class="rev-btn rev-btn--ghost" id="revRetryBtn">다시 분석</button>` : "";
     if (an.parseError) {
@@ -1635,6 +1657,7 @@
           const tgtHtml = tLoc ? revMarkSentence(tLoc, "rev-o") : `<span class="rev-o">${esc(d.targetFrag)}</span>`;
           pair = `<div class="rev-diff-pair">
             <div class="rev-sent-row"><span class="rev-diff-lbl">내</span><span class="rev-sent">${mineHtml || "<i>—</i>"}</span></div>
+            ${revFixedRow(mLoc ? mLoc.sentence : "", d.fixed)}
             <div class="rev-sent-row"><span class="rev-diff-lbl">목표</span><span class="rev-sent">${tgtHtml || "<i>—</i>"}</span></div>
           </div>`;
           const model = tLoc ? tLoc.sentence : d.targetFrag;
@@ -1648,8 +1671,10 @@
             </div>`;
           }
         } else {
+          const mLoc = attemptText ? revLocate(attemptText, d.mine) : null;
           pair = `<div class="rev-diff-pair">
             <div class="rev-sent-row"><span class="rev-diff-lbl">내</span><span class="rev-frag rev-x">${esc(d.mine) || "—"}</span></div>
+            ${revFixedRow(mLoc ? mLoc.sentence : "", d.fixed)}
             <div class="rev-sent-row"><span class="rev-diff-lbl">목표</span><span class="rev-frag rev-o">${esc(d.targetFrag) || "—"}</span></div>
           </div>`;
         }
@@ -1660,6 +1685,10 @@
           ${practice}
         </div>`;
       }).join("") + `</div>`;
+      // 옳은 문장이 생기기 전에 받은 분석 — 다시 분석하면 함께 온다
+      if (ctx && !an.partial && !an.diffs.some((d) => d.fixed)) {
+        html += `<div class="rev-fix-hint">이 분석엔 옳은 문장이 없습니다 — 다시 분석하면 내 문장을 고친 형태가 함께 나옵니다.${retryBtn}</div>`;
+      }
     } else {
       html += `<div class="rev-none">— 오류가 없습니다.</div>`;
     }
@@ -3187,9 +3216,13 @@
           for (const d of a.analysis.diffs) {
             const k = patKey(d.mine, d.targetFrag);
             let row = agg.get(k);
-            if (!row) agg.set(k, row = { mine: d.mine, targetFrag: d.targetFrag, category: d.category, note: d.note, count: 0, last: "" });
+            if (!row) agg.set(k, row = { mine: d.mine, targetFrag: d.targetFrag, category: d.category, note: d.note, fixed: "", mineSent: "", count: 0, last: "" });
             row.count++;
-            if (a.timestamp > row.last) { row.last = a.timestamp; if (d.note) row.note = d.note; }
+            if (a.timestamp > row.last) {
+              row.last = a.timestamp; if (d.note) row.note = d.note;
+              // 옳은 문장은 가장 최근 시도의 것 — 칠할 기준(그 시도의 내 문장)도 함께
+              if (d.fixed) { row.fixed = d.fixed; const loc = revLocate(a.text, d.mine); row.mineSent = loc ? loc.sentence : ""; }
+            }
           }
         }
       }
@@ -3235,6 +3268,7 @@
           </div>
           <div class="rev-diff-pair">
             <div class="rev-sent-row"><span class="rev-diff-lbl">내</span><span class="rev-frag rev-x">${esc(d.mine) || "—"}</span></div>
+            ${revFixedRow(d.mineSent, d.fixed)}
             <div class="rev-sent-row"><span class="rev-diff-lbl">목표</span><span class="rev-frag rev-o">${esc(d.targetFrag) || "—"}</span></div>
           </div>
           ${d.note ? `<div class="pattern-note">${esc(d.note)}</div>` : ""}
@@ -3606,6 +3640,7 @@
         ? `${draft.trim() ? `<div class="pat-review-mine"><span class="rev-diff-lbl">이번</span><span class="rev-frag">${esc(draft)}</span></div>` : ""}
            <div class="rev-diff-pair">
              <div class="rev-sent-row"><span class="rev-diff-lbl">전에</span><span class="rev-frag rev-x">${esc(p.mine) || "—"}</span></div>
+             ${revFixedRow("", p.fixed)}
              <div class="rev-sent-row"><span class="rev-diff-lbl">목표</span><span class="rev-frag rev-o">${esc(p.targetFrag) || "—"}</span></div>
            </div>
            ${p.note ? `<div class="pattern-note">${esc(p.note)}</div>` : ""}
@@ -3666,6 +3701,7 @@
         </div>
         <div class="rev-diff-pair">
           <div class="rev-sent-row"><span class="rev-diff-lbl">내</span><span class="rev-frag rev-x">${esc(p.mine) || "—"}</span></div>
+          ${revFixedRow("", p.fixed)}
           <div class="rev-sent-row"><span class="rev-diff-lbl">목표</span><span class="rev-frag rev-o">${esc(p.targetFrag) || "—"}</span></div>
         </div>
         ${p.note ? `<div class="pattern-note">${esc(p.note)}</div>` : ""}

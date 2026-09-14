@@ -942,6 +942,10 @@ a { color: inherit; }
 .rev-x { background: var(--wd-del-bg); color: var(--wd-del-fg); border-radius: 2px; padding: 0 2px; font-weight: 600; }
 .rev-o { background: var(--wd-ins-bg); color: var(--wd-ins-fg); border-radius: 2px; padding: 0 2px; font-weight: 600; }
 .rev-frag.rev-x, .rev-frag.rev-o { flex: 0 1 auto; }
+/* 옳은 문장 — 내 문장을 최소로 고친 것: 고친 단어만 파랗게 (빨강 = 내, 초록 = 목표) */
+.rev-fix { background: var(--color-background-info); color: var(--color-text-info); border-radius: 2px; padding: 0 2px; font-weight: 600; }
+.rev-fix-same { margin-left: 8px; font-family: var(--font-korean); font-size: 10.5px; color: var(--color-text-tertiary); white-space: nowrap; }
+.rev-fix-hint { margin-top: 10px; display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; font-family: var(--font-korean); font-size: 12px; color: var(--color-text-tertiary); }
 .rev-diff-note { margin-top: 8px; font-family: var(--font-korean); font-size: 12.5px; line-height: 1.65; color: var(--color-text-secondary); }
 
 /* 필사 칸 — hand-copy the correct sentence */
