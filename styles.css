@@ -1374,6 +1374,40 @@ a { color: inherit; }
 .pat-review-mine { display: flex; gap: 8px; align-items: baseline; margin-bottom: 6px; }
 .pat-rev-done { color: var(--color-text-success); }
 
+/* 선택 모드 — 복습 카드·목록 줄을 골라 한꺼번에 지우기 */
+.pat-select-btn {
+  margin-left: auto; padding: 6px 12px; font-size: 12px; color: var(--color-text-tertiary);
+  border: 0.5px solid var(--color-border-secondary); border-radius: 6px; transition: background-color 0.15s, color 0.15s;
+}
+.pat-select-btn:hover { color: var(--color-text-secondary); background: var(--color-background-secondary); }
+.pat-select-btn.is-on { background: var(--color-text-primary); color: var(--color-background-primary); border-color: var(--color-text-primary); }
+.pat-selbar {
+  position: sticky; top: 0; z-index: 5; display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+  margin: -12px 0 14px; padding: 8px 10px 8px 14px;
+  background: var(--color-background-primary);
+  border: 0.5px solid var(--color-border-secondary); border-radius: 8px; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.06);
+}
+.pat-selbar-n { font-family: var(--font-korean); font-size: 12.5px; color: var(--color-text-primary); }
+.pat-selbar-gap { flex: 1; }
+.rev-btn--danger { color: var(--wd-del-fg); border-color: var(--wd-del-fg); }
+.rev-btn--danger:hover:not(:disabled) { background: var(--wd-del-bg); color: var(--wd-del-fg); border-color: var(--wd-del-fg); }
+.pattern-list.is-selecting [data-patsel] { cursor: pointer; user-select: none; -webkit-user-select: none; border-radius: 6px; }
+.pattern-list.is-selecting .pat-review-card { margin: 0 -8px; padding-left: 8px; padding-right: 8px; }
+.pattern-list.is-selecting [data-patsel]:hover { background: var(--color-background-tertiary); }
+.pattern-list.is-selecting .is-picked,
+.pattern-list.is-selecting .is-picked:hover { background: var(--color-background-info); }
+.pattern-list.is-selecting [data-patsel]:focus-visible { outline: 1.5px solid var(--color-text-tertiary); outline-offset: 2px; }
+.pat-check {
+  flex: none; width: 15px; height: 15px; border-radius: 4px;
+  border: 1px solid var(--color-border-secondary); background: var(--color-background-primary);
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.is-picked .pat-check { background: var(--color-text-primary); border-color: var(--color-text-primary); }
+.is-picked .pat-check::after {
+  content: ""; width: 4px; height: 8px; transform: translateY(-1px) rotate(45deg);
+  border: solid var(--color-background-primary); border-width: 0 1.6px 1.6px 0;
+}
+
 /* 코퍼스 (문학/학술) — 헤더 토글 · 프로젝트/서가 칩 */
 .corpus-seg { margin-left: 10px; }
 .corpus-seg button { padding: 3px 9px; font-size: 11px; }

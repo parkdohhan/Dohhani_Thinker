@@ -961,7 +961,7 @@
       "revSetup","revSetupKo","revSetupTarget","revSetupSave","revSetupCancel","revSetupSplit","revSetupSplitWrap",
       "revWrite","revKo","revAttemptH","revAttemptInput","revSubmit","revWriteMeta","revEditSetup","revPrior","revCompare",
       "revPassBefore","revPassAfter","revAddPassage","revHlToolbar",
-      "patternsBtn","patternsCount","patternsView","patternsSub","patternsFilter","patternsStarFilter","patternsCats","patternList",
+      "patternsBtn","patternsCount","patternsView","patternsSub","patternsFilter","patternsStarFilter","patternsCats","patternList","patternsSelectBtn","patternsSelBar",
       "questionsBtn","questionsCount","questionsView","questionsSub","questionsFilter","questionsStarFilter","questionsCats","questionList",
       "askDock","askCtx","askNew","askMin","askLog","askSel","askForm","askInput","askSend","askFab",
       "libraryBtn","libraryCount","libraryView","librarySub","kitGrid",
@@ -1016,6 +1016,8 @@
   function renderRoute() {
     if (!user) return;
     const { name } = parseHash();
+    // 패턴 페이지를 떠나면 선택 모드도 끝난다 — 돌아왔을 때 골라 둔 게 남아 있지 않게
+    if (name !== "patterns" && patternsState.selecting) { patternsState.selecting = false; patSel.clear(); }
     [D.emptyState, D.entryView, D.reverseView, D.wordsView, D.sentencesView, D.patternsView, D.questionsView, D.libraryView, D.projectsView, D.projectDetailView].forEach((v) => (v.hidden = true));
     D.searchScrim.hidden = true;
     [D.searchBtn, D.wordsBtn, D.sentencesBtn, D.patternsBtn, D.questionsBtn, D.libraryBtn, D.projectsBtn].forEach((b) => b.classList.remove("is-on"));
@@ -3651,7 +3653,12 @@
   }
 
   /* ─────────────────────── 나의 패턴 (pattern note) ─────────────────────── */
-  let patternsState = { filter: "", cat: "all", star: "all" };
+  let patternsState = { filter: "", cat: "all", star: "all", selecting: false };
+  // 선택 모드 — 복습 카드와 목록 줄에서 골라 한꺼번에 지운다. id로 고르므로
+  // 오늘 복습과 목록에 같이 나온 패턴은 두 곳이 함께 켜진다.
+  const patSel = new Set();
+  let patVisibleIds = [];
+  const patSelAttrs = (id) => `data-patsel="${escAttr(id)}" role="checkbox" tabindex="0" aria-checked="${patSel.has(id)}"`;
   // 복습 드릴의 화면 상태 — 어떤 카드가 정답을 깠는지, 쓰다 만 시도문
   const patReviewUI = { open: new Set(), drafts: new Map() };
   // copy는 얕고 retrieval이 정착을 만든다 — 담긴 패턴은 시차를 두고
@@ -3661,6 +3668,14 @@
     const revealed = patReviewUI.open.has(p.id);
     const draft = patReviewUI.drafts.get(p.id) || "";
     const id = escAttr(p.id);
+    if (patternsState.selecting) {
+      // 고르는 동안엔 한국어 조각으로만 알아본다 — 정답은 계속 가리고, 입력·채점은 치운다
+      return `<div class="pat-review-card${patSel.has(p.id) ? " is-picked" : ""}" data-patrevcard="${id}" ${patSelAttrs(p.id)}>
+        <div class="pat-review-top"><span class="pat-check" aria-hidden="true"></span>${revCatBadge(p.category)}${p.hits > 1 ? `<span class="pattern-hits">${p.hits}회 반복</span>` : ""}
+          <span class="pat-review-stage">기억 ${esc(srsLabel(p.srs))}</span></div>
+        <div class="pat-review-ko">${esc(p.ko)}</div>
+      </div>`;
+    }
     // 버튼마다 누르면 다음 복습이 언제가 되는지 미리 보여준다 — 곡선이 눈에 보이게
     const pv = (g) => srsDaysLabel(srsReview(p.srs, g).days);
     return `<div class="pat-review-card" data-patrevcard="${id}">
@@ -3711,6 +3726,11 @@
 
     // 오늘 복습 — 컬렉션에서 끝나지 않도록, 도래한 패턴을 맨 위에서 회수시킨다
     const due = duePatterns().sort((a, b) => String(a.nextReview).localeCompare(String(b.nextReview)));
+    // 선택은 지금 화면에 보이는 것 안에서만 — 거르기로 가려진 패턴이 몰래 지워지지 않게
+    patVisibleIds = [...new Set([...due, ...list].map((p) => p.id))];
+    for (const id of [...patSel]) if (!patVisibleIds.includes(id)) patSel.delete(id);
+    D.patternList.classList.toggle("is-selecting", patternsState.selecting);
+    paintPatSelBar();
     const reviewHtml = due.length
       ? `<div class="pat-review" id="patReview">
           <div class="pat-review-h">오늘 복습 · ${due.length}개 — 한국어만 보고 다시 영어로</div>
@@ -3723,12 +3743,14 @@
     }
     D.patternList.innerHTML = reviewHtml + list.map((p) => {
       const src = findEntry(p.sourceEntryId);
-      return `<div class="pattern-row${p.starred ? " is-starred" : ""}" data-pat="${escAttr(p.id)}">
+      const sel = patternsState.selecting;
+      return `<div class="pattern-row${p.starred ? " is-starred" : ""}${sel && patSel.has(p.id) ? " is-picked" : ""}" data-pat="${escAttr(p.id)}"${sel ? " " + patSelAttrs(p.id) : ""}>
         <div class="pattern-row-top">
+          ${sel ? `<span class="pat-check" aria-hidden="true"></span>` : ""}
           ${revCatBadge(p.category)}
           ${p.hits > 1 ? `<span class="pattern-hits">${p.hits}회 반복</span>` : ""}
-          <button type="button" class="pattern-star" data-pat-star="${escAttr(p.id)}" title="반복 실패 표시">${p.starred ? "★" : "☆"}</button>
-          <button type="button" class="pattern-del" data-pat-del="${escAttr(p.id)}" title="이 패턴 지우기">삭제</button>
+          ${sel ? "" : `<button type="button" class="pattern-star" data-pat-star="${escAttr(p.id)}" title="반복 실패 표시">${p.starred ? "★" : "☆"}</button>
+          <button type="button" class="pattern-del" data-pat-del="${escAttr(p.id)}" title="이 패턴 지우기">삭제</button>`}
         </div>
         <div class="rev-diff-pair">
           <div class="rev-sent-row"><span class="rev-diff-lbl">내</span><span class="rev-frag rev-x">${esc(p.mine) || "—"}</span></div>
@@ -3744,6 +3766,48 @@
         </div>
       </div>`;
     }).join("");
+  }
+  function paintPatSelBar() {
+    const on = patternsState.selecting;
+    D.patternsSelectBtn.textContent = on ? "선택 끝" : "선택";
+    D.patternsSelectBtn.classList.toggle("is-on", on);
+    D.patternsSelectBtn.setAttribute("aria-pressed", String(on));
+    D.patternsSelBar.hidden = !on;
+    if (!on) { D.patternsSelBar.innerHTML = ""; return; }
+    const n = patSel.size, total = patVisibleIds.length;
+    const allOn = total > 0 && n === total;
+    D.patternsSelBar.innerHTML =
+      `<span class="pat-selbar-n">${n ? `${n}개 선택` : "지울 패턴을 고르세요"}</span>
+       <button type="button" class="rev-btn rev-btn--ghost" data-patsel-all${total ? "" : " disabled"}>${allOn ? "선택 해제" : `모두 선택 (${total})`}</button>
+       <span class="pat-selbar-gap"></span>
+       <button type="button" class="rev-btn rev-btn--danger" data-patsel-del${n ? "" : " disabled"}>삭제${n ? ` ${n}개` : ""}</button>
+       <button type="button" class="rev-btn" data-patsel-done>취소</button>`;
+  }
+  function setPatSelecting(on) {
+    patternsState.selecting = !!on;
+    patSel.clear();
+    renderPatternsView();
+  }
+  // 한 줄만 켜고 끈다 — 목록 전체를 다시 그리지 않아 스크롤이 튀지 않게
+  function togglePatSel(id) {
+    if (patSel.has(id)) patSel.delete(id); else patSel.add(id);
+    const on = patSel.has(id);
+    D.patternList.querySelectorAll(`[data-patsel="${CSS.escape(id)}"]`).forEach((el) => {
+      el.classList.toggle("is-picked", on);
+      el.setAttribute("aria-checked", String(on));
+    });
+    paintPatSelBar();
+  }
+  function deleteSelectedPatterns() {
+    const n = patSel.size; if (!n) return;
+    if (!confirm(`선택한 패턴 ${n}개를 지울까요?\n복습 일정도 함께 사라지고, 되돌릴 수 없습니다.`)) return;
+    const gone = new Set(patSel);
+    state.patterns = state.patterns.filter((p) => !gone.has(p.id));
+    for (const id of gone) { patReviewUI.open.delete(id); patReviewUI.drafts.delete(id); }
+    patternsState.selecting = false; patSel.clear();
+    touchAppState();
+    renderPatternsView(); renderSidebarCounts(); renderRevisitList();
+    toast(`패턴 ${n}개를 지웠습니다`);
   }
 
   /* ─────────────────────── 바로 묻기 · 질문 노트 ─────────────────────── */
@@ -4598,6 +4662,24 @@
       const b = ev.target.closest("button[data-cat]"); if (!b) return;
       patternsState.cat = b.dataset.cat; renderPatternsView();
     });
+    // 선택 모드 — 골라서 한꺼번에 지우기
+    D.patternsSelectBtn.addEventListener("click", () => setPatSelecting(!patternsState.selecting));
+    D.patternsSelBar.addEventListener("click", (ev) => {
+      if (ev.target.closest("[data-patsel-all]")) {
+        const allOn = patVisibleIds.length > 0 && patSel.size === patVisibleIds.length;
+        patSel.clear();
+        if (!allOn) for (const id of patVisibleIds) patSel.add(id);
+        renderPatternsView();
+        return;
+      }
+      if (ev.target.closest("[data-patsel-del]")) { deleteSelectedPatterns(); return; }
+      if (ev.target.closest("[data-patsel-done]")) setPatSelecting(false);
+    });
+    D.patternList.addEventListener("keydown", (ev) => {
+      if (!patternsState.selecting || (ev.key !== " " && ev.key !== "Enter")) return;
+      const it = ev.target.closest("[data-patsel]"); if (!it) return;
+      ev.preventDefault(); togglePatSel(it.dataset.patsel);
+    });
     // 복습 드릴 — 쓰는 중 초안 보관
     D.patternList.addEventListener("input", (ev) => {
       const ta = ev.target.closest("[data-patrev-input]"); if (!ta) return;
@@ -4605,6 +4687,12 @@
       autoGrow(ta, 200);
     });
     D.patternList.addEventListener("click", (ev) => {
+      // 선택 모드 — 카드·줄 어디를 눌러도 고르기만 한다 (대조·채점·열기는 잠시 멈춤)
+      if (patternsState.selecting) {
+        const it = ev.target.closest("[data-patsel]");
+        if (it) { ev.preventDefault(); togglePatSel(it.dataset.patsel); }
+        return;
+      }
       const reveal = ev.target.closest("[data-patrev-reveal]");
       if (reveal) {
         const id = reveal.dataset.patrevReveal;
@@ -4906,7 +4994,13 @@
         else if (ev.key === "ArrowLeft") { ev.preventDefault(); tourGo(-1); }
         return;
       }
-      if (ev.key === "Escape") { if (!D.modalScrim.hidden) closeModal(); else if (!D.searchScrim.hidden) closeSearch(); else { closeSlashMenu(); hideToolbar(); } hideWordTip(); }
+      if (ev.key === "Escape") {
+        if (!D.modalScrim.hidden) closeModal();
+        else if (!D.searchScrim.hidden) closeSearch();
+        else if (patternsState.selecting && !D.patternsView.hidden) setPatSelecting(false);
+        else { closeSlashMenu(); hideToolbar(); }
+        hideWordTip();
+      }
     });
     window.addEventListener("resize", () => { applySidebar(); applyAskDock(); if (!D.entryView.hidden) autoGrow(D.interpInput); if (!D.reverseView.hidden) autoGrow(D.revAttemptInput, 900); autoGrow(D.claudeInput, 160); hideToolbar(); hideWordTip(); });
     window.addEventListener("hashchange", renderRoute);
