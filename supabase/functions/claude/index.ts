@@ -392,6 +392,39 @@ function normalizeSpeechResult(parsed: any, fallbackText: string) {
   return out;
 }
 
+// === 패턴 복습 교정 (patfix) mode ===
+// 나의 패턴's review drill: the reader saw ONLY a Korean fragment and wrote English
+// for it from memory. We repair THAT sentence — not the pattern's stored rendering,
+// which belongs to the whole original paragraph — so the card can show
+// 이번 / 옳은 / 목표 side by side. JSON only.
+const PATFIX_PROMPT = `A Korean academic writer is doing a retrieval drill. They were shown ONLY a Korean fragment and wrote English for it from memory. You get that Korean, what they wrote, and one reference rendering (NOT an answer key).
+
+Return their own sentence, minimally repaired: fix grammar errors and meaning slips against the Korean, but keep their structure, word order and word choices wherever those are acceptable English. Do NOT rewrite it toward the reference, do NOT add anything the Korean does not say, and do NOT extend it past what the Korean fragment covers. If what they wrote is already correct English that carries the Korean, return it unchanged.
+
+Also write one short Korean sentence (분석체 — no 존댓말, no praise, no filler) saying what you fixed and why. If nothing needed fixing, say what their version gets right, or — when it differs from the reference only in style or register — name that difference instead. Keep English words and grammatical terms in English.
+
+Return STRICT JSON only — no markdown fences, no prose before or after:
+
+{"fixed": "<내 문장을 최소로 고친 것>", "note": "<한 문장>"}`;
+
+function buildPatfixUserMessage(ko: string, target: string, mine: string): string {
+  const parts = [
+    `[Korean fragment they were shown]\n${ko.trim()}`,
+    `[What they wrote from memory]\n${mine.trim()}`,
+  ];
+  if (target.trim()) parts.push(`[A reference rendering — one acceptable version, not an answer key]\n${target.trim()}`);
+  return parts.join("\n\n");
+}
+
+function normalizePatfixResult(parsed: any) {
+  const out: any = { fixed: "", note: "" };
+  if (parsed && typeof parsed === "object") {
+    if (typeof parsed.fixed === "string") out.fixed = parsed.fixed.trim().slice(0, 600);
+    if (typeof parsed.note === "string") out.note = parsed.note.trim().slice(0, 400);
+  }
+  return out;
+}
+
 // === 바로 묻기 (ask) mode ===
 // A tutor docked beside every page. The reader fires a quick question; we answer
 // it and, in the same reply, file it as a 질문 노트 card (a mistakes notebook).
@@ -553,10 +586,11 @@ Deno.serve(async (req) => {
   const isSegment = payload?.segment === true;
   const isReverse = !isSegment && payload?.reverse === true;
   const isSpeech = !isSegment && !isReverse && payload?.speech === true;
-  const isAsk = !isSegment && !isReverse && !isSpeech && payload?.ask === true;
+  const isPatfix = !isSegment && !isReverse && !isSpeech && payload?.patfix === true;
+  const isAsk = !isSegment && !isReverse && !isSpeech && !isPatfix && payload?.ask === true;
   const reflect = typeof payload?.reflect === "string" ? payload.reflect : "";
-  const isReflect = !isSegment && !isReverse && !isSpeech && !isAsk && (reflect === "correct" || reflect === "expand" || reflect === "deep");
-  const extract = !isSegment && !isReverse && !isSpeech && !isAsk && !isReflect && payload?.extract === true;
+  const isReflect = !isSegment && !isReverse && !isSpeech && !isPatfix && !isAsk && (reflect === "correct" || reflect === "expand" || reflect === "deep");
+  const extract = !isSegment && !isReverse && !isSpeech && !isPatfix && !isAsk && !isReflect && payload?.extract === true;
 
   let messages: Array<{ role: string; content: string }>;
   let system: string;
@@ -600,6 +634,15 @@ Deno.serve(async (req) => {
     const corpus = payload?.corpus === "literary" ? "literary" : "academic";
     system = buildReverseSystem(payload?.context, corpus);
     messages = [{ role: "user", content: buildReverseUserMessage(koSource, target, attempt, priorAttempts) }];
+  } else if (isPatfix) {
+    // 패턴 복습 교정: the one sentence they just produced from a Korean fragment.
+    const ko = typeof payload?.ko === "string" ? payload.ko : "";
+    const target = typeof payload?.target === "string" ? payload.target : "";
+    const mine = typeof payload?.mine === "string" ? payload.mine : "";
+    if (!mine.trim()) return json({ error: "`mine` (what the reader wrote) is required." }, 400);
+    if (!ko.trim()) return json({ error: "`ko` (the Korean fragment) is required." }, 400);
+    system = PATFIX_PROMPT;
+    messages = [{ role: "user", content: buildPatfixUserMessage(ko, target, mine) }];
   } else {
     const turns = Array.isArray(payload?.messages) ? payload.messages : null;
     if (!turns || turns.length === 0) {
@@ -637,7 +680,7 @@ Deno.serve(async (req) => {
       body: JSON.stringify({
         model: MODEL,
         // 분할 모드는 두 원문을 통째로 다시 받아써야 하므로 상한을 가장 넉넉히 잡는다
-        max_tokens: (isSegment || isReverse) ? 6000 : (isSpeech || isReflect || isAsk) ? MAX_TOKENS_JSON : MAX_TOKENS,
+        max_tokens: (isSegment || isReverse) ? 6000 : (isSpeech || isReflect || isAsk) ? MAX_TOKENS_JSON : isPatfix ? 900 : MAX_TOKENS,
         system,
         messages,
       }),
@@ -684,6 +727,11 @@ Deno.serve(async (req) => {
   const meta = { truncated, model: out?.model ?? MODEL, usage: out?.usage ?? null };
   if (isSpeech) return json({ speech: structured(normalizeSpeechResult), ...meta });
   if (isReverse) return json({ reverse: structured(normalizeReverseResult), ...meta });
+  if (isPatfix) {
+    // 한 문장짜리 응답이라 살릴 조각이 없다 — 못 읽으면 못 읽었다고 알린다
+    const out = normalizePatfixResult(parseReflectJSON(text));
+    return json({ patfix: { ...out, parseError: !out.fixed }, ...meta });
+  }
   if (isReflect) return json({ reflect: structured((p, fb) => normalizeReflectResult(p, reflect, fb)), ...meta });
   if (isAsk) {
     const { reply, note } = splitNote(text);

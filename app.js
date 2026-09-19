@@ -3659,8 +3659,9 @@
   const patSel = new Set();
   let patVisibleIds = [];
   const patSelAttrs = (id) => `data-patsel="${escAttr(id)}" role="checkbox" tabindex="0" aria-checked="${patSel.has(id)}"`;
-  // 복습 드릴의 화면 상태 — 어떤 카드가 정답을 깠는지, 쓰다 만 시도문
-  const patReviewUI = { open: new Set(), drafts: new Map() };
+  // 복습 드릴의 화면 상태 — 어떤 카드가 정답을 깠는지, 쓰다 만 시도문,
+  // 이번에 쓴 문장의 교정(옳은), 필사를 기다리는 채점
+  const patReviewUI = { open: new Set(), drafts: new Map(), fixes: new Map(), gating: new Map() };
   // copy는 얕고 retrieval이 정착을 만든다 — 담긴 패턴은 시차를 두고
   // 한국어 조각만 보여 주고 다시 영어로 만들게 한다. 자기 채점(맞았다/틀렸다)으로
   // 주기를 진행시킨다: 정답은 하나가 아니므로 문자열 일치로 처벌하지 않는다.
@@ -3678,27 +3679,119 @@
     }
     // 버튼마다 누르면 다음 복습이 언제가 되는지 미리 보여준다 — 곡선이 눈에 보이게
     const pv = (g) => srsDaysLabel(srsReview(p.srs, g).days);
+    // 대조 화면은 이번 차례만 다룬다: 방금 쓴 문장 / 그 문장을 고친 옳은 문장 / 목표.
+    // 담아 둔 옛 문장(전에)과 옛 교정문은 한국어 조각 밖의 내용까지 끌고 오므로 여기 쓰지 않는다.
+    const mine = draft.trim();
+    const fix = patReviewUI.fixes.get(p.id);
+    const gate = patReviewUI.gating.get(p.id);
+    let fixRow = "";
+    if (mine && fix) {
+      if (fix.pending) fixRow = `<div class="rev-sent-row"><span class="rev-diff-lbl">옳은</span><span class="rev-sent pat-fix-wait">교정 중…</span></div>`;
+      else if (fix.error) fixRow = `<div class="rev-sent-row"><span class="rev-diff-lbl">옳은</span><span class="rev-sent pat-fix-err">교정을 받지 못했습니다 — ${esc(fix.error)}<button type="button" class="rev-btn rev-btn--ghost pat-fix-retry" data-patfix-retry="${id}">다시</button></span></div>`;
+      else if (fix.fixed) fixRow = revFixedRow(mine, fix.fixed);
+    }
+    // 잊었다·겨우 떠올렸다는 맞는 문장을 한 번 옮겨 적어야 넘어간다 — 필사 없이 진도만 나가지 않게
+    const foot = gate
+      ? `<div class="rev-practice pat-practice${gate.practice.trim() ? " is-off" : ""}" data-patgate="${id}">
+           <div class="rev-practice-h">맞는 문장 필사${gate.practice.trim() ? `<span class="rev-practice-no">✗ 아직 다릅니다</span>` : ""}</div>
+           <textarea class="rev-practice-input" data-patrev-practice="${id}" spellcheck="false"
+             placeholder="위 목표 문장을 그대로 옮겨 적습니다. 일치해야 넘어갑니다.">${esc(gate.practice)}</textarea>
+           <div class="pat-review-foot">
+             <span class="rev-meta rev-gate">${esc(SRS_GRADE_LABEL[gate.grade])} — 옮겨 적으면 다음 복습 ${esc(pv(gate.grade))}</span>
+             <button type="button" class="rev-btn rev-btn--ghost" data-patrev-gatecancel="${id}">다시 고르기</button>
+           </div>
+         </div>`
+      : `<div class="pat-review-foot pat-grade">
+           <button type="button" class="rev-btn rev-btn--ghost" data-patrev-grade="again" data-patrev-id="${id}">잊었다<span class="pat-grade-when">${pv("again")}</span></button>
+           <button type="button" class="rev-btn" data-patrev-grade="hard" data-patrev-id="${id}">겨우 떠올렸다<span class="pat-grade-when">${pv("hard")}</span></button>
+           <button type="button" class="rev-btn rev-btn--primary" data-patrev-grade="good" data-patrev-id="${id}">바로 떠올렸다<span class="pat-grade-when">${pv("good")}</span></button>
+         </div>`;
     return `<div class="pat-review-card" data-patrevcard="${id}">
       <div class="pat-review-top">${revCatBadge(p.category)}${p.hits > 1 ? `<span class="pattern-hits">${p.hits}회 반복</span>` : ""}
         <span class="pat-review-stage">기억 ${esc(srsLabel(p.srs))}</span></div>
       <div class="pat-review-ko">${esc(p.ko)}</div>
       ${revealed
-        ? `${draft.trim() ? `<div class="pat-review-mine"><span class="rev-diff-lbl">이번</span><span class="rev-frag">${esc(draft)}</span></div>` : ""}
-           <div class="rev-diff-pair">
-             <div class="rev-sent-row"><span class="rev-diff-lbl">전에</span><span class="rev-frag rev-x">${esc(p.mine) || "—"}</span></div>
-             ${revFixedRow("", p.fixed)}
+        ? `<div class="rev-diff-pair">
+             ${mine ? `<div class="rev-sent-row"><span class="rev-diff-lbl">이번</span><span class="rev-frag">${esc(mine)}</span></div>` : ""}
+             ${fixRow}
              <div class="rev-sent-row"><span class="rev-diff-lbl">목표</span><span class="rev-frag rev-o">${esc(p.targetFrag) || "—"}</span></div>
            </div>
+           ${fix && fix.note && !fix.pending && !fix.error ? `<div class="rev-diff-note">${esc(fix.note)}</div>` : ""}
            ${p.note ? `<div class="pattern-note">${esc(p.note)}</div>` : ""}
-           <div class="pat-review-foot pat-grade">
-             <button type="button" class="rev-btn rev-btn--ghost" data-patrev-grade="again" data-patrev-id="${id}">잊었다<span class="pat-grade-when">${pv("again")}</span></button>
-             <button type="button" class="rev-btn" data-patrev-grade="hard" data-patrev-id="${id}">겨우 떠올렸다<span class="pat-grade-when">${pv("hard")}</span></button>
-             <button type="button" class="rev-btn rev-btn--primary" data-patrev-grade="good" data-patrev-id="${id}">바로 떠올렸다<span class="pat-grade-when">${pv("good")}</span></button>
-           </div>`
+           ${foot}`
         : `<textarea class="pat-review-input" data-patrev-input="${id}" spellcheck="false"
              placeholder="정답을 보지 않고, 위 한국어를 영어로 다시 만들어 봅니다.">${esc(draft)}</textarea>
            <div class="pat-review-foot"><button type="button" class="rev-btn" data-patrev-reveal="${id}">정답 대조</button></div>`}
     </div>`;
+  }
+  function repaintPatCard(id) {
+    const p = state.patterns.find((x) => x.id === id);
+    const card = D.patternList.querySelector(`[data-patrevcard="${CSS.escape(id)}"]`);
+    if (p && card) card.outerHTML = patReviewCardHtml(p);
+  }
+  // 필사 기준은 목표 문장 — 대소문자·문장부호만 흘려 보고 나머지는 엄격히 (역번역과 같은 규칙).
+  // 목표가 비어 있는 구버전 패턴은 옮겨 적을 문장이 없으므로 그냥 통과시킨다 (영구 교착 방지).
+  const patCopyMatches = (p, text) => {
+    const m = revNormForMatch(p.targetFrag);
+    return !m || (!!String(text || "").trim() && revNormForMatch(text) === m);
+  };
+  // 이번에 쓴 문장을 그 자리에서 교정받는다 — 담아 둔 옛 교정문(원문단 전체)이 아니라
+  async function runPatFix(p, draft) {
+    const id = p.id;
+    const mine = String(draft || "").trim();
+    if (!mine) return;
+    if (revNormForMatch(mine) && revNormForMatch(mine) === revNormForMatch(p.targetFrag)) {
+      // 목표와 같은 문장이면 물어볼 것이 없다
+      patReviewUI.fixes.set(id, { draft: mine, pending: false, fixed: mine, note: "목표와 같은 문장입니다.", error: "" });
+      repaintPatCard(id);
+      return;
+    }
+    patReviewUI.fixes.set(id, { draft: mine, pending: true, fixed: "", note: "", error: "" });
+    repaintPatCard(id);
+    let next;
+    try {
+      const { data: sess } = await sb.auth.getSession();
+      const tok = sess && sess.session ? sess.session.access_token : null;
+      if (!tok) throw new Error("로그인이 만료되었습니다");
+      const resp = await fetch(CLAUDE_FN, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", apikey: SUPABASE_KEY, Authorization: `Bearer ${tok}` },
+        body: JSON.stringify({ patfix: true, ko: p.ko, target: p.targetFrag, mine }),
+      });
+      const out = await resp.json().catch(() => ({}));
+      if (!resp.ok || out.error) throw new Error((out && out.error) ? out.error : `요청 실패 (${resp.status})`);
+      const r = (out && out.patfix) || {};
+      if (!r.fixed) throw new Error("교정 응답을 읽지 못했습니다");
+      next = { draft: mine, pending: false, fixed: r.fixed, note: r.note || "", error: "" };
+    } catch (err) {
+      next = { draft: mine, pending: false, fixed: "", note: "", error: err.message || String(err) };
+    }
+    // 그 사이 채점돼 사라졌거나 다시 썼으면 버린다
+    const cur = patReviewUI.fixes.get(id);
+    if (!cur || cur.draft !== mine) return;
+    patReviewUI.fixes.set(id, next);
+    repaintPatCard(id);
+  }
+  function applyPatGrade(p, grade) {
+    if (grade === "again") p.hits += 1;
+    const r = srsReview(p.srs, grade);
+    p.srs = r.srs; p.nextReview = r.due;
+    patReviewUI.open.delete(p.id); patReviewUI.drafts.delete(p.id);
+    patReviewUI.fixes.delete(p.id); patReviewUI.gating.delete(p.id);
+    touchAppState();
+    renderPatternsView(); renderSidebarCounts(); renderRevisitList();
+    toast(`${SRS_GRADE_LABEL[grade]} — 다음 복습 ${srsDaysLabel(r.days)}${grade === "again" ? ` · 반복 ${p.hits}회` : ""}`);
+  }
+  // ✗ 표시만 갈아 끼운다 — 옮겨 적는 중에 카드를 다시 그리면 커서를 잃는다
+  function paintPatGateState(id) {
+    const g = patReviewUI.gating.get(id); if (!g) return;
+    const box = D.patternList.querySelector(`[data-patgate="${CSS.escape(id)}"]`); if (!box) return;
+    const tried = !!g.practice.trim();
+    box.classList.toggle("is-off", tried);
+    const h = box.querySelector(".rev-practice-h"); if (!h) return;
+    const no = h.querySelector(".rev-practice-no");
+    if (tried && !no) h.insertAdjacentHTML("beforeend", `<span class="rev-practice-no">✗ 아직 다릅니다</span>`);
+    else if (!tried && no) no.remove();
   }
   function renderPatternsView() {
     if (!Array.isArray(state.patterns)) state.patterns = [];
@@ -3803,7 +3896,10 @@
     if (!confirm(`선택한 패턴 ${n}개를 지울까요?\n복습 일정도 함께 사라지고, 되돌릴 수 없습니다.`)) return;
     const gone = new Set(patSel);
     state.patterns = state.patterns.filter((p) => !gone.has(p.id));
-    for (const id of gone) { patReviewUI.open.delete(id); patReviewUI.drafts.delete(id); }
+    for (const id of gone) {
+      patReviewUI.open.delete(id); patReviewUI.drafts.delete(id);
+      patReviewUI.fixes.delete(id); patReviewUI.gating.delete(id);
+    }
     patternsState.selecting = false; patSel.clear();
     touchAppState();
     renderPatternsView(); renderSidebarCounts(); renderRevisitList();
@@ -4682,9 +4778,17 @@
     });
     // 복습 드릴 — 쓰는 중 초안 보관
     D.patternList.addEventListener("input", (ev) => {
-      const ta = ev.target.closest("[data-patrev-input]"); if (!ta) return;
-      patReviewUI.drafts.set(ta.dataset.patrevInput, ta.value);
-      autoGrow(ta, 200);
+      const ta = ev.target.closest("[data-patrev-input]");
+      if (ta) { patReviewUI.drafts.set(ta.dataset.patrevInput, ta.value); autoGrow(ta, 200); return; }
+      // 필사 — 목표와 일치하는 순간 채점이 넘어간다
+      const pr = ev.target.closest("[data-patrev-practice]"); if (!pr) return;
+      const id = pr.dataset.patrevPractice;
+      const g = patReviewUI.gating.get(id); if (!g) return;
+      g.practice = pr.value;
+      autoGrow(pr, 200);
+      const p = state.patterns.find((x) => x.id === id); if (!p) return;
+      if (patCopyMatches(p, g.practice)) { applyPatGrade(p, g.grade); return; }
+      paintPatGateState(id);
     });
     D.patternList.addEventListener("click", (ev) => {
       // 선택 모드 — 카드·줄 어디를 눌러도 고르기만 한다 (대조·채점·열기는 잠시 멈춤)
@@ -4699,21 +4803,34 @@
         patReviewUI.open.add(id);
         // 카드 하나만 다시 그린다 — 다른 카드의 초안 포커스를 지키기 위해
         const p = state.patterns.find((x) => x.id === id);
-        const card = D.patternList.querySelector(`[data-patrevcard="${CSS.escape(id)}"]`);
-        if (p && card) card.outerHTML = patReviewCardHtml(p);
+        const draft = (patReviewUI.drafts.get(id) || "").trim();
+        if (p && draft) runPatFix(p, draft);   // 「교정 중…」까지 runPatFix가 그린다
+        else repaintPatCard(id);
         return;
       }
       const gb = ev.target.closest("[data-patrev-grade]");
       if (gb) {
         const id = gb.dataset.patrevId, grade = gb.dataset.patrevGrade;
         const p = state.patterns.find((x) => x.id === id); if (!p) return;
-        if (grade === "again") p.hits += 1;
-        const r = srsReview(p.srs, grade);
-        p.srs = r.srs; p.nextReview = r.due;
-        patReviewUI.open.delete(id); patReviewUI.drafts.delete(id);
-        touchAppState();
-        renderPatternsView(); renderSidebarCounts(); renderRevisitList();
-        toast(`${SRS_GRADE_LABEL[grade]} — 다음 복습 ${srsDaysLabel(r.days)}${grade === "again" ? ` · 반복 ${p.hits}회` : ""}`);
+        // 못 떠올렸으면 맞는 문장을 한 번 옮겨 적고 넘어간다
+        if ((grade === "again" || grade === "hard") && revNormForMatch(p.targetFrag)) {
+          patReviewUI.gating.set(id, { grade, practice: "" });
+          repaintPatCard(id);
+          const ta = D.patternList.querySelector(`[data-patrev-practice="${CSS.escape(id)}"]`);
+          if (ta) { try { ta.focus(); } catch (_) {} }
+          return;
+        }
+        applyPatGrade(p, grade);
+        return;
+      }
+      const gc = ev.target.closest("[data-patrev-gatecancel]");
+      if (gc) { const id = gc.dataset.patrevGatecancel; patReviewUI.gating.delete(id); repaintPatCard(id); return; }
+      const fx = ev.target.closest("[data-patfix-retry]");
+      if (fx) {
+        const id = fx.dataset.patfixRetry;
+        const p = state.patterns.find((x) => x.id === id);
+        const draft = (patReviewUI.drafts.get(id) || "").trim();
+        if (p && draft) { patReviewUI.fixes.delete(id); runPatFix(p, draft); }
         return;
       }
       const open = ev.target.closest("[data-open-entry]"); if (open) { go("#daily"); openEntry(open.dataset.openEntry); return; }
